@@ -1,16 +1,19 @@
-const express = require('express')
-const http = require('http')
-const { Server } = require('socket.io')
-const path = require('path')
-const fs = require('fs')
-const { 
-  default: makeWASocket, 
+import express from 'express'
+import http from 'http'
+import { Server } from 'socket.io'
+import path from 'path'
+import fs from 'fs'
+import { fileURLToPath } from 'url'
+import makeWASocket, { 
   useMultiFileAuthState, 
   downloadMediaMessage, 
   fetchLatestBaileysVersion 
-} = require('@whiskeysockets/baileys')
-const P = require('pino')
-const axios = require('axios')
+} from '@whiskeysockets/baileys'
+import P from 'pino'
+import axios from 'axios'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 const app = express()
 const server = http.createServer(app)
@@ -45,7 +48,13 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
   const { state, saveCreds } = await useMultiFileAuthState(authFolder)
   const { version } = await fetchLatestBaileysVersion()
 
-  const sock = makeWASocket({
+  const sock = makeWASocket.default ? makeWASocket.default({
+    version,
+    logger: P({ level: 'silent' }),
+    auth: state,
+    browser: ["Ubuntu", "Chrome", "20.0.04"],
+    printQRInTerminal: false
+  }) : makeWASocket({
     version,
     logger: P({ level: 'silent' }),
     auth: state,
