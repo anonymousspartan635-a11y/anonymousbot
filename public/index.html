@@ -1,98 +1,340 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ANONYMOUS BOT - WhatsApp Deployer</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ANONYMOUS BOT — Control Center</title>
   <script src="/socket.io/socket.io.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-    body { background-color: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
-    .container { background: #1e293b; border-radius: 16px; padding: 35px; width: 100%; max-width: 420px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); text-align: center; }
-    h1 { font-size: 24px; color: #38bdf8; margin-bottom: 8px; }
-    p { font-size: 14px; color: #94a3b8; margin-bottom: 24px; }
-    .input-group { margin-bottom: 20px; text-align: left; }
-    label { font-size: 12px; color: #cbd5e1; text-transform: uppercase; letter-spacing: 0.5px; }
-    input { width: 100%; padding: 14px; margin-top: 6px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #fff; font-size: 16px; outline: none; }
-    input:focus { border-color: #38bdf8; }
-    button { width: 100%; padding: 14px; background: #22c55e; border: none; border-radius: 8px; color: #fff; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
-    button:hover { background: #16a34a; }
-    .status-box { margin-top: 20px; font-size: 14px; color: #e2e8f0; min-height: 20px; }
-    .code-display { margin-top: 15px; font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #38bdf8; background: #0f172a; padding: 15px; border-radius: 8px; border: 1px dashed #38bdf8; display: none; }
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(18, 26, 43, 0.7);
+      --border: rgba(255, 255, 255, 0.08);
+      --accent: #00f2fe;
+      --accent-gradient: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(0, 242, 254, 0.05) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(79, 172, 254, 0.05) 0%, transparent 40%);
+    }
+
+    .container {
+      width: 100%;
+      max-width: 480px;
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 32px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(0, 242, 254, 0.1);
+      color: var(--accent);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      border: 1px solid rgba(0, 242, 254, 0.2);
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      background-color: var(--accent);
+      border-radius: 50%;
+      box-shadow: 0 0 10px var(--accent);
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.4; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.2); }
+      100% { opacity: 0.4; transform: scale(0.9); }
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 6px;
+    }
+
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+
+    .input-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+    }
+
+    input[type="tel"] {
+      width: 100%;
+      padding: 14px 18px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: #fff;
+      font-size: 1rem;
+      outline: none;
+      transition: all 0.3s ease;
+    }
+
+    input[type="tel"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 15px rgba(0, 242, 254, 0.2);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    button.btn-primary {
+      width: 100%;
+      padding: 14px;
+      background: var(--accent-gradient);
+      border: none;
+      border-radius: 12px;
+      color: #000;
+      font-weight: 700;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 20px rgba(0, 242, 254, 0.3);
+    }
+
+    button.btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 25px rgba(0, 242, 254, 0.5);
+    }
+
+    button.btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Pairing Code Box */
+    .code-box {
+      display: none;
+      margin-top: 24px;
+      padding: 20px;
+      background: rgba(0, 242, 254, 0.03);
+      border: 1px dashed var(--accent);
+      border-radius: 16px;
+      text-align: center;
+    }
+
+    .code-box.active {
+      display: block;
+      animation: fadeIn 0.5s ease;
+    }
+
+    .code-display {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: 8px;
+      color: var(--accent);
+      margin: 12px 0;
+      font-family: monospace;
+      user-select: all;
+    }
+
+    .status-card {
+      margin-top: 24px;
+      padding: 14px 18px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--text-muted);
+    }
+
+    .dot.connected { background: var(--success); box-shadow: 0 0 10px var(--success); }
+    .dot.connecting { background: var(--warning); box-shadow: 0 0 10px var(--warning); }
+    .dot.error { background: var(--danger); box-shadow: 0 0 10px var(--danger); }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
 <body>
 
   <div class="container">
-    <h1>ANONYMOUS BOT</h1>
-    <p>Deploy your bot in seconds with Pairing Code</p>
-
-    <div class="input-group">
-      <label for="phoneNumber">WhatsApp Phone Number</label>
-      <input type="text" id="phoneNumber" placeholder="e.g. 233540000000" />
+    <div class="header">
+      <div class="badge">
+        <span class="pulse"></span> Live Platform
+      </div>
+      <h1>ANONYMOUS BOT</h1>
+      <p class="subtitle">Deploy & link your WhatsApp bot instantly</p>
     </div>
 
-    <button onclick="deployBot()">Get Pairing Code</button>
+    <form id="deployForm">
+      <div class="input-group">
+        <label for="phone">Phone Number (With Country Code)</label>
+        <input type="tel" id="phone" placeholder="e.g. 2348012345678" required>
+      </div>
+      <button type="submit" id="submitBtn" class="btn-primary">Generate Pairing Code</button>
+    </form>
 
-    <div id="status" class="status-box"></div>
-    <div id="codeDisplay" class="code-display"></div>
+    <div id="codeBox" class="code-box">
+      <p style="font-size: 0.8rem; color: var(--text-muted);">YOUR PAIRING CODE</p>
+      <div id="codeDisplay" class="code-display">------</div>
+      <p style="font-size: 0.75rem; color: var(--text-muted);">Open WhatsApp &gt; Linked Devices &gt; Link with phone number</p>
+    </div>
+
+    <div class="status-card">
+      <span style="color: var(--text-muted); font-size: 0.85rem;">System Status</span>
+      <div class="status-indicator">
+        <span id="statusDot" class="dot"></span>
+        <span id="statusText">Ready</span>
+      </div>
+    </div>
   </div>
 
   <script>
     const socket = io();
+    const form = document.getElementById('deployForm');
+    const phoneInput = document.getElementById('phone');
+    const submitBtn = document.getElementById('submitBtn');
+    const codeBox = document.getElementById('codeBox');
+    const codeDisplay = document.getElementById('codeDisplay');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+
     let currentSessionId = null;
 
-    async function deployBot() {
-      const phone = document.getElementById('phoneNumber').value.trim();
-      const statusBox = document.getElementById('status');
-      const codeDisplay = document.getElementById('codeDisplay');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const phoneNumber = phoneInput.value.trim();
 
-      if (!phone) {
-        statusBox.innerText = '⚠️ Please enter a valid phone number.';
-        return;
-      }
+      if (!phoneNumber) return;
 
-      statusBox.innerText = '🔄 Requesting pairing code...';
-      codeDisplay.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.innerText = 'Requesting Code...';
+      statusDot.className = 'dot connecting';
+      statusText.innerText = 'Connecting...';
 
       try {
         const res = await fetch('/api/deploy', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phoneNumber: phone })
+          body: JSON.stringify({ phoneNumber })
         });
 
         const data = await res.json();
-        if (data.sessionId) {
+        if (data.success) {
           currentSessionId = data.sessionId;
         } else {
-          statusBox.innerText = '❌ Failed to initiate session.';
+          alert('Error: ' + data.error);
+          resetUI();
         }
       } catch (err) {
-        statusBox.innerText = '❌ Server error. Try again.';
+        alert('Failed to connect to server.');
+        resetUI();
       }
-    }
+    });
 
     socket.on('pairingCode', (data) => {
       if (data.sessionId === currentSessionId) {
-        document.getElementById('status').innerText = '✅ Enter this code on WhatsApp:';
-        const codeDisplay = document.getElementById('codeDisplay');
         codeDisplay.innerText = data.code;
-        codeDisplay.style.display = 'block';
+        codeBox.classList.add('active');
+        submitBtn.innerText = 'Code Generated';
+        statusDot.className = 'dot connecting';
+        statusText.innerText = 'Awaiting Link';
       }
     });
 
     socket.on('statusUpdate', (data) => {
       if (data.sessionId === currentSessionId) {
-        document.getElementById('status').innerText = 'Status: ' + data.status;
+        if (data.status === 'CONNECTED') {
+          statusDot.className = 'dot connected';
+          statusText.innerText = 'Online & Active';
+          submitBtn.innerText = 'Bot Connected!';
+        } else if (data.status === 'LOGGED_OUT') {
+          statusDot.className = 'dot error';
+          statusText.innerText = 'Disconnected';
+          resetUI();
+        }
       }
     });
 
     socket.on('botError', (data) => {
       if (data.sessionId === currentSessionId) {
-        document.getElementById('status').innerText = '❌ ' + data.message;
+        alert(data.message);
+        resetUI();
       }
     });
+
+    function resetUI() {
+      submitBtn.disabled = false;
+      submitBtn.innerText = 'Generate Pairing Code';
+      codeBox.classList.remove('active');
+      statusDot.className = 'dot';
+      statusText.innerText = 'Ready';
+    }
   </script>
 </body>
 </html>
