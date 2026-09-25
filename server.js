@@ -20,7 +20,6 @@ app.use(express.json())
 app.use(express.static(path.join(__dirname, 'public')))
 
 const activeSessions = new Map()
-const statusEmojis = ['❤️', '🔥', '😍', '😂', '🥰', '😎', '🤩', '👏', '🫡', '💯', '✨', '🙌']
 const badWordsList = ['fuck', 'bitch', 'asshole', 'bastard', 'shit', 'cunt', 'dick']
 
 // Global Default Switches
@@ -37,10 +36,9 @@ global.alwaysOnline = true
 global.readCommands = true
 global.autoTyping = false
 global.autoRecording = false
-global.aiEnabled = true
-global.downloadEnabled = true
 
 const msgStore = {}
+const awaitingSettingsReply = new Set()
 
 async function startUserBot(sessionId, phoneNumber, socketEmitter) {
   const authFolder = path.join(__dirname, 'sessions', sessionId)
@@ -101,9 +99,10 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
   // Settings Menu Generator
   async function sendSettingsMenu(jid) {
+    awaitingSettingsReply.add(jid)
     const textMenu = `╭───「 *ANONYMOUS BOT* 」───
 │ ⚙️ *BOT SETTINGS*
-│ Tap or reply with a number to toggle.
+│ Reply with a number to toggle:
 │
 │ ✯ 1. Auto Status View [${global.autoStatus ? 'ON ✅' : 'OFF ❌'}]
 │ ✯ 2. MSG Type [${global.msgType}]
@@ -119,57 +118,26 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 │ ✯ 12. Auto Typing [${global.autoTyping ? 'ON ✅' : 'OFF ❌'}]
 │ ✯ 13. Auto Recording [${global.autoRecording ? 'ON ✅' : 'OFF ❌'}]
 ╰───────────────────
-💬 *Reply with a number*`
+💬 *Reply with a number (1-13)*`
 
     await sock.sendMessage(jid, { text: textMenu })
   }
 
-  // MUSIC / SONG DOWNLOADER FUNCTION (DOWNLOAD BY NAME)
+  // Song Downloader Helper
   async function downloadSongByName(songQuery, jid) {
-    await sock.sendMessage(jid, { text: `🎵 Searching and downloading audio for: *${songQuery}*...` })
-
-    // Primary API
+    await sock.sendMessage(jid, { text: `🎵 Searching and downloading: *${songQuery}*...` })
     try {
       let res = await axios.get(`https://api.vreden.my.id/api/ytplay?query=${encodeURIComponent(songQuery)}`)
       let audioUrl = res.data?.result?.download?.url || res.data?.result?.url || res.data?.result?.dl_url
       let title = res.data?.result?.title || songQuery
 
       if (audioUrl) {
-        await sock.sendMessage(jid, { 
-          audio: { url: audioUrl }, 
-          mimetype: 'audio/mpeg', 
-          fileName: `${title}.mp3` 
-        })
+        await sock.sendMessage(jid, { audio: { url: audioUrl }, mimetype: 'audio/mpeg', fileName: `${title}.mp3` })
         return
       }
     } catch (e) {}
 
-    // Fallback API 1: Youtube search then fetch audio
-    try {
-      let searchRes = await axios.get(`https://api.vreden.my.id/api/ytsearch?query=${encodeURIComponent(songQuery)}`)
-      let videoUrl = searchRes.data?.result?.[0]?.url
-
-      if (videoUrl) {
-        let dlRes = await axios.get(`https://api.vreden.my.id/api/ytmp3?url=${encodeURIComponent(videoUrl)}`)
-        let dlUrl = dlRes.data?.result?.download?.url || dlRes.data?.result?.url
-        if (dlUrl) {
-          await sock.sendMessage(jid, { audio: { url: dlUrl }, mimetype: 'audio/mpeg' })
-          return
-        }
-      }
-    } catch (e) {}
-
-    // Fallback API 2
-    try {
-      let altRes = await axios.get(`https://api.siputzx.my.id/api/d/ytmp3?url=${encodeURIComponent(songQuery)}`)
-      let altUrl = altRes.data?.data?.dl || altRes.data?.dl
-      if (altUrl) {
-        await sock.sendMessage(jid, { audio: { url: altUrl }, mimetype: 'audio/mpeg' })
-        return
-      }
-    } catch (e) {}
-
-    await sock.sendMessage(jid, { text: `❌ Could not download song. Please try another song title.` })
+    await sock.sendMessage(jid, { text: `❌ Could not download song. Please check the song name or try again.` })
   }
 
   // Primary Messages Handler
@@ -241,8 +209,14 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
     const cmd = text.toLowerCase()
 
-    // Switch Toggles by reply number
-    if (['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'].includes(cmd)) {
+    // Command: Open Settings
+    if (cmd === '.settings' || cmd === '.botsettings') {
+      await sendSettingsMenu(jid)
+      return
+    }
+
+    // Toggle Settings Options by replying with a number
+    if (awaitingSettingsReply.has(jid) && ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'].includes(cmd)) {
       let replyMsg = ''
       switch (cmd) {
         case '1': global.autoStatus = !global.autoStatus; replyMsg = `Auto Status View is now: ${global.autoStatus ? 'ON ✅' : 'OFF ❌'}`; break;
@@ -259,27 +233,22 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         case '12': global.autoTyping = !global.autoTyping; replyMsg = `Auto Typing is now: ${global.autoTyping ? 'ON ✅' : 'OFF ❌'}`; break;
         case '13': global.autoRecording = !global.autoRecording; replyMsg = `Auto Recording is now: ${global.autoRecording ? 'ON ✅' : 'OFF ❌'}`; break;
       }
+      awaitingSettingsReply.delete(jid)
       await sock.sendMessage(jid, { text: replyMsg })
       return
     }
 
-    if (cmd === '.settings' || cmd === '.botsettings') {
-      await sendSettingsMenu(jid)
+    // Command: Alive Status
+    if (cmd === '.alive') {
+      await sock.sendMessage(jid, { text: 'ANONYMOUS BOT is Active ✅' })
       return
     }
 
-    if (!global.autoReply && !cmd.startsWith('.')) return
-
-    // MUSIC DOWNLOAD COMMAND (.song <name>)
+    // Command: Song Downloader
     if (cmd.startsWith('.song ') || cmd.startsWith('.play ') || cmd.startsWith('.music ')) {
       let songName = text.slice(text.indexOf(' ') + 1).trim()
       if (!songName) return sock.sendMessage(jid, { text: 'Usage: .song <music name>' })
       await downloadSongByName(songName, jid)
-      return
-    }
-
-    if (cmd === '.alive') {
-      await sock.sendMessage(jid, { text: 'ANONYMOUS BOT is Active ✅' })
       return
     }
   })
