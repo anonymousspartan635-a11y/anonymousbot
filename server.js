@@ -111,23 +111,23 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     awaitingSettingsReply.add(jid)
     const textMenu = `╭───「 *ANONYMOUS BOT* 」───
 │ ⚙️ *BOT SETTINGS*
-│ Reply with a number to toggle:
+│ Reply with a dot command (.1 to .13) to toggle:
 │
-│ ✯ 1. Auto Status View [${global.autoStatus ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 2. MSG Type [${global.msgType}]
-│ ✯ 3. Anti View Once [${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 4. Auto Sticker [${global.autoSticker ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 5. Auto Reply [${global.autoReply ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 6. Anti Bad Words [${global.antiBadWords ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 7. Anti Link [${global.antiLink ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 8. Anti Call [${global.antiCall ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 9. Anti Delete [${global.antiDelete ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 10. Always Online [${global.alwaysOnline ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 11. Read Commands [${global.readCommands ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 12. Auto Typing [${global.autoTyping ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ 13. Auto Recording [${global.autoRecording ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .1 Auto Status View [${global.autoStatus ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .2 MSG Type [${global.msgType}]
+│ ✯ .3 Anti View Once [${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .4 Auto Sticker [${global.autoSticker ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .5 Auto Reply [${global.autoReply ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .6 Anti Bad Words [${global.antiBadWords ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .7 Anti Link [${global.antiLink ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .8 Anti Call [${global.antiCall ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .9 Anti Delete [${global.antiDelete ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .10 Always Online [${global.alwaysOnline ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .11 Read Commands [${global.readCommands ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .12 Auto Typing [${global.autoTyping ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .13 Auto Recording [${global.autoRecording ? 'ON ✅' : 'OFF ❌'}]
 ╰───────────────────
-💬 *Reply with a number (1-13)*`
+💬 *Send .1 through .13 to toggle features*`
 
     await sock.sendMessage(jid, { text: textMenu })
   }
@@ -175,6 +175,8 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       ""
     ).trim()
 
+    if (!text) return
+
     if (global.readCommands && !msg.key.fromMe) await sock.readMessages([msg.key])
 
     if (!msg.key.fromMe) {
@@ -219,15 +221,20 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     const cmd = text.toLowerCase()
 
     // Command: Open Settings
-    if (cmd === '.settings' || cmd === '.botsettings') {
+    if (cmd === '.settings' || cmd === '.botsettings' || cmd === '.menu') {
       await sendSettingsMenu(jid)
       return
     }
 
-    // Toggle Settings Options by replying with a number
-    if (awaitingSettingsReply.has(jid) && ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'].includes(cmd)) {
+    // Toggle Settings Options using Dot Prefix (.1 to .13) or raw number
+    const isDotSwitch = ['.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9', '.10', '.11', '.12', '.13'].includes(cmd)
+    const isNumSwitch = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'].includes(cmd)
+
+    if (isDotSwitch || (awaitingSettingsReply.has(jid) && isNumSwitch)) {
+      let option = cmd.replace('.', '')
       let replyMsg = ''
-      switch (cmd) {
+
+      switch (option) {
         case '1': global.autoStatus = !global.autoStatus; replyMsg = `Auto Status View is now: ${global.autoStatus ? 'ON ✅' : 'OFF ❌'}`; break;
         case '2': global.msgType = global.msgType === 'text' ? 'button' : 'text'; replyMsg = `MSG Type set to: ${global.msgType}`; break;
         case '3': global.antiViewOnce = !global.antiViewOnce; replyMsg = `Anti View Once is now: ${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}`; break;
@@ -242,6 +249,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         case '12': global.autoTyping = !global.autoTyping; replyMsg = `Auto Typing is now: ${global.autoTyping ? 'ON ✅' : 'OFF ❌'}`; break;
         case '13': global.autoRecording = !global.autoRecording; replyMsg = `Auto Recording is now: ${global.autoRecording ? 'ON ✅' : 'OFF ❌'}`; break;
       }
+
       awaitingSettingsReply.delete(jid)
       await sock.sendMessage(jid, { text: replyMsg })
       return
@@ -254,9 +262,12 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     }
 
     // Command: Song Downloader
-    if (cmd.startsWith('.song ') || cmd.startsWith('.play ') || cmd.startsWith('.music ')) {
-      let songName = text.slice(text.indexOf(' ') + 1).trim()
-      if (!songName) return sock.sendMessage(jid, { text: 'Usage: .song <music name>' })
+    if (cmd.startsWith('.song') || cmd.startsWith('.play') || cmd.startsWith('.music')) {
+      let songName = text.replace(/^\.(song|play|music)/i, '').trim()
+      if (!songName) {
+        await sock.sendMessage(jid, { text: '⚠️ Please provide a song name.\n*Example:* `.song Drake Hotline Bling`' })
+        return
+      }
       await downloadSongByName(songName, jid)
       return
     }
