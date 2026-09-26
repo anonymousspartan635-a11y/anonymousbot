@@ -166,6 +166,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     clearSession = mongoAuth.clearSession
   } catch (err) {
     console.error('Failed to load MongoDB Session, check MONGO_URI variable.', err)
+    socketEmitter.emit('botError', { sessionId, message: 'MongoDB connection error.' })
     return
   }
 
@@ -177,40 +178,71 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     logger: P({ level: 'silent' }),
     auth: state,
     browser: ["Ubuntu", "Chrome", "20.0.04"],
-    printQRInTerminal: false
+    printQRInTerminal: false,
+    connectTimeoutMs: 60000,
+    defaultQueryTimeoutMs: 60000,
+    keepAliveIntervalMs: 10000
   })
 
   activeSessions.set(sessionId, sock)
   sock.ev.on('creds.update', saveCreds)
 
-  if (!sock.authState.creds.registered && phoneNumber) {
-    const cleanNumber = phoneNumber.replace(/[^0-9]/g, '')
-    setTimeout(async () => {
-      try {
-        let code = await sock.requestPairingCode(cleanNumber)
-        socketEmitter.emit('pairingCode', { sessionId, code })
-      } catch (e) {
-        socketEmitter.emit('botError', { sessionId, message: 'Failed to generate code: ' + e.message })
-      }
-    }, 3000)
-  }
+  let pairingRequested = false
 
   sock.ev.on('connection.update', async (u) => {
-    if (u.connection === 'open') {
+    const { connection, lastDisconnect } = u
+
+    if (connection === 'connecting') {
+      console.log('🔄 Connecting to WhatsApp socket...')
+    }
+
+    if (connection === 'open') {
       socketEmitter.emit('statusUpdate', { sessionId, status: 'CONNECTED' })
       if (global.alwaysOnline) await sock.sendPresenceUpdate('available').catch(() => {})
     }
-    if (u.connection === 'close') {
-      const statusCode = u.lastDisconnect?.error?.output?.statusCode
-      if (statusCode !== 401) {
+
+    if (connection === 'close') {
+      const statusCode = lastDisconnect?.error?.output?.statusCode
+      console.log(`❌ Connection closed with status code: ${statusCode}`)
+
+      if (statusCode === 401) {
+        socketEmitter.emit('statusUpdate', { sessionId, status: 'LOGGED_OUT' })
+        await clearSession().catch(() => {})
+        activeSessions.delete(sessionId)
+      } else {
         socketEmitter.emit('statusUpdate', { sessionId, status: 'RECONNECTING' })
         setTimeout(() => startUserBot(sessionId, phoneNumber, socketEmitter), 5000)
-      } else {
-        socketEmitter.emit('statusUpdate', { sessionId, status: 'LOGGED_OUT' })
-        activeSessions.delete(sessionId)
       }
     }
   })
+
+  // Event-Driven Pairing Code Generation
+  if (!sock.authState.creds.registered && phoneNumber) {
+    const cleanNumber = phoneNumber.replace(/[^0-9]/g, '')
+
+    sock.ev.on('connection.update', async (u) => {
+      if ((u.connection === 'connecting' || u.qr) && !pairingRequested) {
+        pairingRequested = true
+        // Allow TCP handshake 6 seconds to register on WhatsApp servers
+        setTimeout(async () => {
+          try {
+            console.log(`📱 Requesting pairing code for ${cleanNumber}...`)
+            let code = await sock.requestPairingCode(cleanNumber)
+            console.log(`✅ Pairing Code Generated: ${code}`)
+            socketEmitter.emit('pairingCode', { sessionId, code })
+          } catch (e) {
+            console.error('Pairing code request error:', e)
+            await clearSession().catch(() => {})
+            activeSessions.delete(sessionId)
+            socketEmitter.emit('botError', { 
+              sessionId, 
+              message: 'Failed to generate code: Connection Closed. Session cleared, please click Deploy again.' 
+            })
+          }
+        }, 6000)
+      }
+    })
+  }
 
   // Settings Menu Helper
   async function sendSettingsMenu(jid) {
@@ -250,7 +282,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     await sock.sendMessage(jid, { text: textMenu }).catch(() => {})
   }
 
-  // Song Fetcher with Direct ytdl Extraction & Fallbacks
+  // Song Fetcher
   async function fetchSongDetails(songQuery, jid) {
     await sock.sendMessage(jid, { text: `🔎 Searching YouTube for: *${songQuery}*...` }).catch(() => {})
 
@@ -268,24 +300,17 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       console.error('yt-search failed:', err.message)
     }
 
-    if (!targetUrl) {
-      targetUrl = songQuery
-    }
-
+    if (!targetUrl) targetUrl = songQuery
     let audioUrl = null
 
-    // Direct Extraction via @distube/ytdl-core
     try {
       const info = await ytdl.getInfo(targetUrl)
       const format = ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' })
-      if (format && format.url) {
-        audioUrl = format.url
-      }
+      if (format && format.url) audioUrl = format.url
     } catch (e) {
       console.error('ytdl-core extraction failed:', e.message)
     }
 
-    // Fallback External APIs
     if (!audioUrl) {
       const fallbackApis = [
         `https://api.vreden.my.id/api/ytmp3?url=${encodeURIComponent(targetUrl)}`,
@@ -295,29 +320,20 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       for (const apiUrl of fallbackApis) {
         try {
-          const res = await axios.get(apiUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            timeout: 10000
-          })
+          const res = await axios.get(apiUrl, { timeout: 10000 })
           const result = res.data?.result || res.data
           audioUrl = result?.download?.url || result?.downloadUrl || result?.dl_url || result?.url
           if (audioUrl) break
-        } catch (e) {
-          console.error(`Fallback API failed: ${apiUrl}`, e.message)
-        }
+        } catch (e) {}
       }
     }
 
     if (audioUrl) {
       const menuText = `🎶 *${title}*\n\nSelect delivery format by replying with the number:\n\n1️⃣ Audio File (.mp3)\n2️⃣ Document File (.doc/.mp3)\n3️⃣ Voice Message (PTT)`
-      
       const promptMsg = await sock.sendMessage(jid, { text: menuText }).catch(() => {})
 
       if (promptMsg?.key?.id) {
-        awaitingSongFormatSelection.set(promptMsg.key.id, {
-          audioUrl,
-          title
-        })
+        awaitingSongFormatSelection.set(promptMsg.key.id, { audioUrl, title })
       }
       return
     }
@@ -325,7 +341,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     await sock.sendMessage(jid, { text: `❌ Could not extract audio stream. Please try again shortly.` }).catch(() => {})
   }
 
-  // Helper to extract user target from mentions or replies
   function getTargetJid(msg) {
     const contextInfo = msg.message?.extendedTextMessage?.contextInfo
     if (contextInfo?.mentionedJid?.length > 0) return contextInfo.mentionedJid[0]
@@ -355,7 +370,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       const jid = msg.key.remoteJid
       const sender = msg.key.participant || jid
 
-      // Status View & Auto Reaction
       if (jid === 'status@broadcast' || jid.endsWith('@broadcast')) {
         if (global.autoStatus) {
           await sock.readMessages([msg.key]).catch(() => {})
@@ -391,7 +405,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         else if (global.autoRecording) await sock.sendPresenceUpdate('recording', jid).catch(() => {})
       }
 
-      // Check if user is replying to song format selection
       const contextInfo = msg.message?.extendedTextMessage?.contextInfo
       const quotedId = contextInfo?.stanzaId
 
@@ -405,23 +418,11 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
           try {
             if (choice === '1') {
-              await sock.sendMessage(jid, {
-                audio: { url: songData.audioUrl },
-                mimetype: 'audio/mpeg',
-                fileName: `${songData.title}.mp3`
-              })
+              await sock.sendMessage(jid, { audio: { url: songData.audioUrl }, mimetype: 'audio/mpeg', fileName: `${songData.title}.mp3` })
             } else if (choice === '2') {
-              await sock.sendMessage(jid, {
-                document: { url: songData.audioUrl },
-                mimetype: 'audio/mpeg',
-                fileName: `${songData.title}.mp3`
-              })
+              await sock.sendMessage(jid, { document: { url: songData.audioUrl }, mimetype: 'audio/mpeg', fileName: `${songData.title}.mp3` })
             } else if (choice === '3') {
-              await sock.sendMessage(jid, {
-                audio: { url: songData.audioUrl },
-                mimetype: 'audio/mp4',
-                ptt: true
-              })
+              await sock.sendMessage(jid, { audio: { url: songData.audioUrl }, mimetype: 'audio/mp4', ptt: true })
             }
           } catch (err) {
             await sock.sendMessage(jid, { text: '❌ Failed to send audio file.' }).catch(() => {})
@@ -430,7 +431,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         }
       }
 
-      // Custom message text input for .setreply
       if (awaitingCustomReplyInput.has(jid) && msg.key.fromMe) {
         global.customAwayMsg = text
         awaitingCustomReplyInput.delete(jid)
@@ -438,7 +438,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Silent Anti-ViewOnce
       if (global.antiViewOnce) {
         const viewOnce = msg.message?.viewOnceMessageV2?.message || msg.message?.viewOnceMessage?.message
         if (viewOnce) {
@@ -449,17 +448,14 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
             const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net'
             const senderName = `@${sender.split('@')[0]}`
             const chatLocation = jid.endsWith('@g.us') ? 'a group chat' : 'direct messages'
-            
             let cap = `👁️ *Anti-ViewOnce Saved*\n\n*From:* ${senderName}\n*Location:* Sent in ${chatLocation}`
-            
+
             if (type === 'imageMessage') {
               await sock.sendMessage(myJid, { image: buffer, caption: cap, mentions: [sender] })
             } else if (type === 'videoMessage') {
               await sock.sendMessage(myJid, { video: buffer, caption: cap, mentions: [sender] })
             }
-          } catch (e) {
-            console.error('Error handling ViewOnce media:', e)
-          }
+          } catch (e) {}
         }
       }
 
@@ -486,7 +482,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       const cmd = text.toLowerCase().trim()
 
-      // Command: .setreply
       if (cmd === '.setreply' || cmd.startsWith('.setreply ')) {
         const inlineText = text.substring(9).trim()
         if (inlineText) {
@@ -499,20 +494,16 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Custom Auto-Reply to Greetings
       if (global.autoReply && !msg.key.fromMe) {
         const greetingTriggers = ['hi', 'hello', 'yo', 'wassup', 'sup', 'bro', 'boi', 'hey']
-        
         if (greetingTriggers.includes(cmd)) {
           await sock.sendMessage(jid, { text: global.customAwayMsg }).catch(() => {})
           return
         }
       }
 
-      // Command: .del / .delete
       if (cmd === '.del' || cmd === '.delete') {
         const quotedKey = contextInfo?.stanzaId
-
         if (!quotedKey) {
           await sock.sendMessage(jid, { text: '⚠️ Please reply directly to the message you want to delete using `.del`' }).catch(() => {})
           return
@@ -520,14 +511,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
         const isGroup = jid.endsWith('@g.us')
         const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net'
-        
-        let quotedSender
-        if (isGroup) {
-          quotedSender = contextInfo?.participant
-        } else {
-          quotedSender = contextInfo?.participant || (msg.key.fromMe ? myJid : jid)
-        }
-
+        let quotedSender = isGroup ? contextInfo?.participant : (contextInfo?.participant || (msg.key.fromMe ? myJid : jid))
         const isMyOwnMessage = quotedSender ? (quotedSender.split('@')[0] === sock.user.id.split(':')[0]) : false
 
         if (isGroup && !isMyOwnMessage) {
@@ -540,7 +524,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
             }
           } catch (e) {}
         } else if (!isGroup && !isMyOwnMessage) {
-          await sock.sendMessage(jid, { text: '❌ WhatsApp rules do not allow deleting someone else\'s message in direct messages (DMs).' }).catch(() => {})
+          await sock.sendMessage(jid, { text: '❌ WhatsApp rules do not allow deleting someone else\'s message in direct messages.' }).catch(() => {})
           return
         }
 
@@ -555,113 +539,86 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
           await sock.sendMessage(jid, { delete: deleteKey })
           await sock.sendMessage(jid, { delete: msg.key }).catch(() => {})
         } catch (e) {
-          console.error('Delete error:', e)
           await sock.sendMessage(jid, { text: '❌ Failed to delete message.' }).catch(() => {})
         }
         return
       }
 
-      // Command: .block
       if (cmd.startsWith('.block')) {
         let target = getTargetJid(msg) || jid
-
         if (target.endsWith('@g.us')) {
           await sock.sendMessage(jid, { text: '⚠️ In a group chat, please reply to or tag the user you want to block: `.block @user`' }).catch(() => {})
           return
         }
 
         const cleanJid = target.split('@')[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net'
-
         try {
           await sock.sendMessage(jid, { text: `🚫 Blocking @${cleanJid.split('@')[0]}...`, mentions: [cleanJid] })
           await sock.updateBlockStatus(cleanJid, 'block')
         } catch (e) {
-          console.error('Block error:', e)
           await sock.sendMessage(jid, { text: '❌ Failed to block user: ' + (e.message || e) }).catch(() => {})
         }
         return
       }
 
-      // Command: .unlink
       if (cmd === '.unlink') {
         await sock.sendMessage(jid, { text: '🗑️ *Unlinking Session...*\nDeleting MongoDB Atlas credentials and logging out.' }).catch(() => {})
-        
         try {
           await clearSession()
           activeSessions.delete(sessionId)
           await sock.logout().catch(() => {})
           sock.end(new Error('Session unlinked by user'))
-          console.log(`✅ Session ${sessionId} cleared and socket disconnected.`)
-        } catch (e) {
-          console.error('Error during .unlink command execution:', e)
-        }
+        } catch (e) {}
         return
       }
 
-      // Command: Open Settings
       if (cmd === '.settings' || cmd === '.botsettings' || cmd === '.menu') {
         await sendSettingsMenu(jid)
         return
       }
 
-      // Direct Word Commands
       if (cmd.startsWith('.autoreply')) {
-        if (cmd.includes('on')) global.autoReply = true
-        else if (cmd.includes('off')) global.autoReply = false
-        else global.autoReply = !global.autoReply
+        global.autoReply = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.autoReply
         await sock.sendMessage(jid, { text: `🤖 Auto Reply is now: *${global.autoReply ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
       if (cmd.startsWith('.autostatus')) {
-        if (cmd.includes('on')) global.autoStatus = true
-        else if (cmd.includes('off')) global.autoStatus = false
-        else global.autoStatus = !global.autoStatus
+        global.autoStatus = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.autoStatus
         await sock.sendMessage(jid, { text: `👁️ Auto Status View & Reaction is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
       if (cmd.startsWith('.antiviewonce')) {
-        if (cmd.includes('on')) global.antiViewOnce = true
-        else if (cmd.includes('off')) global.antiViewOnce = false
-        else global.antiViewOnce = !global.antiViewOnce
+        global.antiViewOnce = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.antiViewOnce
         await sock.sendMessage(jid, { text: `👁️ Anti View Once is now: *${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
       if (cmd.startsWith('.anticall')) {
-        if (cmd.includes('on')) global.antiCall = true
-        else if (cmd.includes('off')) global.antiCall = false
-        else global.antiCall = !global.antiCall
+        global.antiCall = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.antiCall
         await sock.sendMessage(jid, { text: `📞 Anti Call is now: *${global.antiCall ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
       if (cmd.startsWith('.antilink')) {
-        if (cmd.includes('on')) global.antiLink = true
-        else if (cmd.includes('off')) global.antiLink = false
-        else global.antiLink = !global.antiLink
+        global.antiLink = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.antiLink
         await sock.sendMessage(jid, { text: `🔗 Anti Link is now: *${global.antiLink ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
       if (cmd.startsWith('.antidelete')) {
-        if (cmd.includes('on')) global.antiDelete = true
-        else if (cmd.includes('off')) global.antiDelete = false
-        else global.antiDelete = !global.antiDelete
+        global.antiDelete = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.antiDelete
         await sock.sendMessage(jid, { text: `🗑️ Anti Delete is now: *${global.antiDelete ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
       if (cmd.startsWith('.alwaysonline')) {
-        if (cmd.includes('on')) global.alwaysOnline = true
-        else if (cmd.includes('off')) global.alwaysOnline = false
-        else global.alwaysOnline = !global.alwaysOnline
+        global.alwaysOnline = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.alwaysOnline
         await sock.sendMessage(jid, { text: `🟢 Always Online is now: *${global.alwaysOnline ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
-      // Menu Toggle Options (.1 to .13)
       const isDotSwitch = ['.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9', '.10', '.11', '.12', '.13'].includes(cmd)
       const isNumSwitch = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'].includes(cmd)
 
@@ -690,7 +647,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Command: .getdp
       if (cmd.startsWith('.getdp')) {
         let target = getTargetJid(msg) || sender
         try {
@@ -702,10 +658,8 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Command: .save
       if (cmd === '.save') {
         const quotedMsg = contextInfo?.quotedMessage
-
         if (!quotedMsg) {
           await sock.sendMessage(jid, { text: '⚠️ Please reply to a media message or ViewOnce using `.save`' }).catch(() => {})
           return
@@ -715,7 +669,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
           const viewOnce = quotedMsg.viewOnceMessageV2?.message || quotedMsg.viewOnceMessage?.message
           const mediaObj = viewOnce ? { message: viewOnce } : { message: quotedMsg }
           const type = Object.keys(mediaObj.message)[0]
-
           const buffer = await downloadMediaMessage(mediaObj, 'buffer', {}, { logger: P({ level: 'silent' }) })
 
           if (type.includes('image')) {
@@ -735,10 +688,8 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Command: .getstat
       if (cmd === '.getstat') {
         const quotedMsg = contextInfo?.quotedMessage
-
         if (!quotedMsg) {
           await sock.sendMessage(jid, { text: '⚠️ Please reply directly to a status update message using `.getstat`' }).catch(() => {})
           return
@@ -761,7 +712,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Group Administration Commands
       if (jid.endsWith('@g.us')) {
         const meta = await sock.groupMetadata(jid).catch(() => null)
         const isBotAdmin = meta?.participants.find(p => p.id === sock.user.id.split(':')[0] + '@s.whatsapp.net')?.admin
@@ -816,13 +766,11 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         }
       }
 
-      // Command: .alive
       if (cmd === '.alive') {
         await sock.sendMessage(jid, { text: 'ANONYMOUS BOT is Active ✅ (Connected via MongoDB Cloud)' }).catch(() => {})
         return
       }
 
-      // Command: .song
       if (cmd.startsWith('.song') || cmd.startsWith('.play') || cmd.startsWith('.music')) {
         let songName = text.replace(/^\.(song|play|music)/i, '').trim()
         if (!songName) {
@@ -862,13 +810,12 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err))
 process.on('unhandledRejection', (reason) => console.error('Unhandled Rejection:', reason))
 
-app.post('/api/deploy', (req, res) => {
+app.post('/api/deploy', async (req, res) => {
   const { phoneNumber } = req.body
   if (!phoneNumber) return res.status(400).json({ error: 'Phone number is required' })
 
   const sessionId = 'primary_user'
 
-  // Safely cleanup existing active session before requesting a new pairing code
   if (activeSessions.has(sessionId)) {
     try {
       const existingSock = activeSessions.get(sessionId)
@@ -877,6 +824,12 @@ app.post('/api/deploy', (req, res) => {
       activeSessions.delete(sessionId)
     } catch (e) {}
   }
+
+  // Force clean slate in MongoDB before generating pairing code
+  try {
+    const mongoAuth = await useMongoAuthState(sessionId)
+    await mongoAuth.clearSession()
+  } catch (e) {}
 
   startUserBot(sessionId, phoneNumber, io)
 
