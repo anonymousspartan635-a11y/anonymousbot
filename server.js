@@ -27,6 +27,18 @@ app.use(express.static(path.join(__dirname, 'public')))
 const activeSessions = new Map()
 const badWordsList = ['fuck', 'bitch', 'asshole', 'bastard', 'shit', 'cunt', 'dick']
 
+// Expanded Array of Reaction Emojis
+const statusEmojis = [
+  // Love & Hearts
+  '❤️', '💖', '💘', '💝', '💗', '💓', '❣️', '💕', '💙', '💚', '💛', '💜', '🖤', '🤍', '🤎',
+  // Hype & Energy
+  '🔥', '⚡', '💯', '✨', '🌟', '💥', '🚀', '💣', '👑', '🏆',
+  // Praise & Support
+  '👍', '👏', '🙌', '🫡', '🤝', '💪', '🥳', '🎉', '🎊',
+  // Reaction Expressions
+  '😍', '🤩', '😎', '🥹', '😂', '🤣', '🤤', '🫠', '🙃', '🙈'
+]
+
 // Global Settings
 global.autoStatus = true
 global.msgType = 'text'
@@ -206,8 +218,16 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 │ ✯ .11 Read Commands [${global.readCommands ? 'ON ✅' : 'OFF ❌'}]
 │ ✯ .12 Auto Typing [${global.autoTyping ? 'ON ✅' : 'OFF ❌'}]
 │ ✯ .13 Auto Recording [${global.autoRecording ? 'ON ✅' : 'OFF ❌'}]
-╰───────────────────
-💬 *Send .1 through .13 or use direct commands (e.g. .autoreply off)*`
+│
+│ 🛠️ *UTILITY COMMANDS:*
+│ ✯ .getdp - Save profile photo
+│ ✯ .save - Save replied media/viewOnce
+│ ✯ .getstat - Save replied status
+│ ✯ .song <name> - Download songs
+│
+│ 👥 *GROUP COMMANDS:*
+│ ✯ .kick | .promote | .demote | .tagall
+╰───────────────────`
 
     await sock.sendMessage(jid, { text: textMenu }).catch(() => {})
   }
@@ -227,6 +247,14 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     } catch (e) {}
 
     await sock.sendMessage(jid, { text: `❌ Could not download song. Please check the song name or try again.` }).catch(() => {})
+  }
+
+  // Helper function to extract user target from mentions or replies
+  function getTargetJid(msg) {
+    const contextInfo = msg.message?.extendedTextMessage?.contextInfo
+    if (contextInfo?.mentionedJid?.length > 0) return contextInfo.mentionedJid[0]
+    if (contextInfo?.participant) return contextInfo.participant
+    return null
   }
 
   // Anti-Call
@@ -251,8 +279,19 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       const jid = msg.key.remoteJid
       const sender = msg.key.participant || jid
 
+      // Status View & Auto Reaction with Expanded Emojis
       if (jid === 'status@broadcast' || jid.endsWith('@broadcast')) {
-        if (global.autoStatus) await sock.readMessages([msg.key]).catch(() => {})
+        if (global.autoStatus) {
+          await sock.readMessages([msg.key]).catch(() => {})
+          try {
+            const randomEmoji = statusEmojis[Math.floor(Math.random() * statusEmojis.length)]
+            await sock.sendMessage(
+              'status@broadcast',
+              { react: { text: randomEmoji, key: msg.key } },
+              { statusJidList: [msg.key.participant] }
+            )
+          } catch (e) {}
+        }
         return
       }
 
@@ -331,7 +370,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         if (cmd.includes('on')) global.autoStatus = true
         else if (cmd.includes('off')) global.autoStatus = false
         else global.autoStatus = !global.autoStatus
-        await sock.sendMessage(jid, { text: `👁️ Auto Status View is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        await sock.sendMessage(jid, { text: `👁️ Auto Status View & Reaction is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
@@ -384,7 +423,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         let replyMsg = ''
 
         switch (option) {
-          case '1': global.autoStatus = !global.autoStatus; replyMsg = `👁️ Auto Status View is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '1': global.autoStatus = !global.autoStatus; replyMsg = `👁️ Auto Status View & Reaction is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*`; break;
           case '2': global.msgType = global.msgType === 'text' ? 'button' : 'text'; replyMsg = `💬 MSG Type set to: *${global.msgType}*`; break;
           case '3': global.antiViewOnce = !global.antiViewOnce; replyMsg = `👁️ Anti View Once is now: *${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}*`; break;
           case '4': global.autoSticker = !global.autoSticker; replyMsg = `🖼️ Auto Sticker is now: *${global.autoSticker ? 'ON ✅' : 'OFF ❌'}*`; break;
@@ -402,6 +441,142 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         awaitingSettingsReply.delete(jid)
         await sock.sendMessage(jid, { text: replyMsg }).catch(() => {})
         return
+      }
+
+      // --- NEW UTILITY COMMANDS ---
+
+      // Command: .getdp (Get Profile Picture)
+      if (cmd.startsWith('.getdp')) {
+        let target = getTargetJid(msg) || sender
+        try {
+          let dpUrl = await sock.profilePictureUrl(target, 'image')
+          await sock.sendMessage(jid, { image: { url: dpUrl }, caption: `🖼️ Profile picture of @${target.split('@')[0]}`, mentions: [target] })
+        } catch (e) {
+          await sock.sendMessage(jid, { text: '❌ Could not retrieve profile picture (User may have hidden it or has no profile picture).' }).catch(() => {})
+        }
+        return
+      }
+
+      // Command: .save (Save Replied Media / ViewOnce)
+      if (cmd === '.save') {
+        const contextInfo = msg.message?.extendedTextMessage?.contextInfo
+        const quotedMsg = contextInfo?.quotedMessage
+
+        if (!quotedMsg) {
+          await sock.sendMessage(jid, { text: '⚠️ Please reply to a media message or ViewOnce using `.save`' }).catch(() => {})
+          return
+        }
+
+        try {
+          const viewOnce = quotedMsg.viewOnceMessageV2?.message || quotedMsg.viewOnceMessage?.message
+          const mediaObj = viewOnce ? { message: viewOnce } : { message: quotedMsg }
+          const type = Object.keys(mediaObj.message)[0]
+
+          const buffer = await downloadMediaMessage(mediaObj, 'buffer', {}, { logger: P({ level: 'silent' }) })
+
+          if (type.includes('image')) {
+            await sock.sendMessage(jid, { image: buffer, caption: '✅ Media Saved' })
+          } else if (type.includes('video')) {
+            await sock.sendMessage(jid, { video: buffer, caption: '✅ Media Saved' })
+          } else if (type.includes('audio')) {
+            await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/mp4' })
+          } else if (type.includes('document')) {
+            await sock.sendMessage(jid, { document: buffer, mimetype: 'application/octet-stream', fileName: 'saved_media' })
+          } else {
+            await sock.sendMessage(jid, { text: '❌ Unsupported media type.' })
+          }
+        } catch (e) {
+          await sock.sendMessage(jid, { text: '❌ Failed to save media: ' + e.message })
+        }
+        return
+      }
+
+      // Command: .getstat (Save Replied Status)
+      if (cmd === '.getstat') {
+        const contextInfo = msg.message?.extendedTextMessage?.contextInfo
+        const quotedMsg = contextInfo?.quotedMessage
+
+        if (!quotedMsg) {
+          await sock.sendMessage(jid, { text: '⚠️ Please reply directly to a status update message using `.getstat`' }).catch(() => {})
+          return
+        }
+
+        try {
+          const buffer = await downloadMediaMessage({ message: quotedMsg }, 'buffer', {}, { logger: P({ level: 'silent' }) })
+          const type = Object.keys(quotedMsg)[0]
+
+          if (type.includes('image')) {
+            await sock.sendMessage(jid, { image: buffer, caption: '📲 Status Downloaded' })
+          } else if (type.includes('video')) {
+            await sock.sendMessage(jid, { video: buffer, caption: '📲 Status Downloaded' })
+          } else {
+            await sock.sendMessage(jid, { text: `📲 Status Text:\n\n${quotedMsg.conversation || quotedMsg.extendedTextMessage?.text || ''}` })
+          }
+        } catch (e) {
+          await sock.sendMessage(jid, { text: '❌ Failed to download status: ' + e.message })
+        }
+        return
+      }
+
+      // --- GROUP ADMINISTRATION COMMANDS ---
+
+      if (jid.endsWith('@g.us')) {
+        // Helper to check group permissions
+        const meta = await sock.groupMetadata(jid).catch(() => null)
+        const isBotAdmin = meta?.participants.find(p => p.id === sock.user.id.split(':')[0] + '@s.whatsapp.net')?.admin
+        const isSenderAdmin = meta?.participants.find(p => p.id === sender)?.admin
+
+        // Command: .kick
+        if (cmd.startsWith('.kick') || cmd.startsWith('.remove')) {
+          if (!isSenderAdmin) return sock.sendMessage(jid, { text: '❌ Only group admins can use this command.' })
+          if (!isBotAdmin) return sock.sendMessage(jid, { text: '❌ I need to be a Group Admin to kick members.' })
+
+          let target = getTargetJid(msg)
+          if (!target) return sock.sendMessage(jid, { text: '⚠️ Please tag or reply to the user you want to kick.' })
+
+          await sock.groupParticipantsUpdate(jid, [target], 'remove')
+          await sock.sendMessage(jid, { text: `🚪 Removed @${target.split('@')[0]} from the group.`, mentions: [target] })
+          return
+        }
+
+        // Command: .promote
+        if (cmd.startsWith('.promote')) {
+          if (!isSenderAdmin) return sock.sendMessage(jid, { text: '❌ Only group admins can promote members.' })
+          if (!isBotAdmin) return sock.sendMessage(jid, { text: '❌ I need to be a Group Admin to promote members.' })
+
+          let target = getTargetJid(msg)
+          if (!target) return sock.sendMessage(jid, { text: '⚠️ Please tag or reply to the user you want to promote.' })
+
+          await sock.groupParticipantsUpdate(jid, [target], 'promote')
+          await sock.sendMessage(jid, { text: `👑 @${target.split('@')[0]} is now an Admin!`, mentions: [target] })
+          return
+        }
+
+        // Command: .demote
+        if (cmd.startsWith('.demote')) {
+          if (!isSenderAdmin) return sock.sendMessage(jid, { text: '❌ Only group admins can demote members.' })
+          if (!isBotAdmin) return sock.sendMessage(jid, { text: '❌ I need to be a Group Admin to demote members.' })
+
+          let target = getTargetJid(msg)
+          if (!target) return sock.sendMessage(jid, { text: '⚠️ Please tag or reply to the user you want to demote.' })
+
+          await sock.groupParticipantsUpdate(jid, [target], 'demote')
+          await sock.sendMessage(jid, { text: `📉 @${target.split('@')[0]} has been demoted to a normal member.`, mentions: [target] })
+          return
+        }
+
+        // Command: .tagall
+        if (cmd.startsWith('.tagall') || cmd.startsWith('.everyone')) {
+          if (!meta) return
+          let participants = meta.participants.map(p => p.id)
+          let announceText = `📢 *ATTENTION EVERYONE* 📢\n\n`
+          participants.forEach((p, idx) => {
+            announceText += `${idx + 1}. @${p.split('@')[0]}\n`
+          })
+
+          await sock.sendMessage(jid, { text: announceText, mentions: participants })
+          return
+        }
       }
 
       // Command: Alive Status
