@@ -2,15 +2,17 @@ import express from 'express'
 import http from 'http'
 import { Server } from 'socket.io'
 import path from 'path'
-import fs from 'fs'
 import { fileURLToPath } from 'url'
 import makeWASocket, { 
-  useMultiFileAuthState, 
   downloadMediaMessage, 
-  fetchLatestBaileysVersion 
+  fetchLatestBaileysVersion, 
+  initAuthCreds, 
+  BufferJSON, 
+  proto 
 } from '@whiskeysockets/baileys'
 import P from 'pino'
 import axios from 'axios'
+import { MongoClient } from 'mongodb'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -25,7 +27,7 @@ app.use(express.static(path.join(__dirname, 'public')))
 const activeSessions = new Map()
 const badWordsList = ['fuck', 'bitch', 'asshole', 'bastard', 'shit', 'cunt', 'dick']
 
-// Global Default Settings
+// Global Settings
 global.autoStatus = true
 global.msgType = 'text'
 global.antiViewOnce = true
@@ -43,14 +45,104 @@ global.autoRecording = false
 const msgStore = {}
 const awaitingSettingsReply = new Set()
 
-async function startUserBot(sessionId, phoneNumber, socketEmitter) {
-  const authFolder = path.join(__dirname, 'sessions', sessionId)
-  
-  if (!fs.existsSync(authFolder)) {
-    fs.mkdirSync(authFolder, { recursive: true })
+// MongoDB Setup
+const MONGO_URI = process.env.MONGO_URI
+let mongoClient, db
+
+async function initMongo() {
+  if (!MONGO_URI) return null
+  if (!mongoClient) {
+    mongoClient = new MongoClient(MONGO_URI)
+    await mongoClient.connect()
+    db = mongoClient.db('anonymousbot')
+    console.log('✅ Connected to MongoDB Atlas Cluster0')
+  }
+  return db
+}
+
+// Custom MongoDB Authentication Handler
+async function useMongoAuthState(sessionId) {
+  const database = await initMongo()
+  if (!database) throw new Error("MONGO_URI not configured")
+
+  const collection = database.collection(`session_${sessionId}`)
+
+  const writeData = async (data, id) => {
+    try {
+      await collection.updateOne(
+        { _id: id },
+        { $set: { data: JSON.stringify(data, BufferJSON.replacer) } },
+        { upsert: true }
+      )
+    } catch (e) {
+      console.error('Mongo write error:', e)
+    }
   }
 
-  const { state, saveCreds } = await useMultiFileAuthState(authFolder)
+  const readData = async (id) => {
+    try {
+      const result = await collection.findOne({ _id: id })
+      if (!result) return null
+      return JSON.parse(result.data, BufferJSON.reviver)
+    } catch (e) {
+      return null
+    }
+  }
+
+  const removeData = async (id) => {
+    try {
+      await collection.deleteOne({ _id: id })
+    } catch (e) {}
+  }
+
+  const creds = (await readData('creds')) || initAuthCreds()
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const data = {}
+          await Promise.all(
+            ids.map(async (id) => {
+              let value = await readData(`${type}-${id}`)
+              if (type === 'app-state-sync-key' && value) {
+                value = proto.Message.AppStateSyncKeyData.fromObject(value)
+              }
+              data[id] = value
+            })
+          )
+          return data
+        },
+        set: async (data) => {
+          const tasks = []
+          for (const category in data) {
+            for (const id in data[category]) {
+              const value = data[category][id]
+              const key = `${category}-${id}`
+              tasks.push(value ? writeData(value, key) : removeData(key))
+            }
+          }
+          await Promise.all(tasks)
+        }
+      }
+    },
+    saveCreds: () => writeData(creds, 'creds')
+  }
+}
+
+async function startUserBot(sessionId, phoneNumber, socketEmitter) {
+  let state, saveCreds
+
+  try {
+    const mongoAuth = await useMongoAuthState(sessionId)
+    state = mongoAuth.state
+    saveCreds = mongoAuth.saveCreds
+  } catch (err) {
+    console.error('Failed to load MongoDB Session, check MONGO_URI variable.', err)
+    return
+  }
+
   const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1015901307] }))
 
   const makeSocket = makeWASocket.default || makeWASocket
@@ -89,21 +181,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         setTimeout(() => startUserBot(sessionId, phoneNumber, socketEmitter), 5000)
       } else {
         socketEmitter.emit('statusUpdate', { sessionId, status: 'LOGGED_OUT' })
-        try { fs.rmSync(authFolder, { recursive: true, force: true }) } catch (e) {}
         activeSessions.delete(sessionId)
-      }
-    }
-  })
-
-  // Anti-Call Handler
-  sock.ev.on('call', async (calls) => {
-    if (!global.antiCall) return
-    for (let call of calls) {
-      if (call.status === 'offer') {
-        try {
-          await sock.rejectCall(call.id, call.from)
-          await sock.sendMessage(call.from, { text: '⚠️ *Anti-Call Active:* Calls are automatically rejected.' })
-        } catch (e) {}
       }
     }
   })
@@ -151,7 +229,20 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     await sock.sendMessage(jid, { text: `❌ Could not download song. Please check the song name or try again.` }).catch(() => {})
   }
 
-  // Primary Messages Handler
+  // Anti-Call
+  sock.ev.on('call', async (calls) => {
+    if (!global.antiCall) return
+    for (let call of calls) {
+      if (call.status === 'offer') {
+        try {
+          await sock.rejectCall(call.id, call.from)
+          await sock.sendMessage(call.from, { text: '⚠️ *Anti-Call Active:* Calls are automatically rejected.' })
+        } catch (e) {}
+      }
+    }
+  })
+
+  // Messages Handler
   sock.ev.on('messages.upsert', async m => {
     try {
       const msg = m.messages[0]
@@ -227,7 +318,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Direct Text Commands with Feedback
+      // Direct Word Commands
       if (cmd.startsWith('.autoreply')) {
         if (cmd.includes('on')) global.autoReply = true
         else if (cmd.includes('off')) global.autoReply = false
@@ -315,7 +406,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       // Command: Alive Status
       if (cmd === '.alive') {
-        await sock.sendMessage(jid, { text: 'ANONYMOUS BOT is Active ✅' }).catch(() => {})
+        await sock.sendMessage(jid, { text: 'ANONYMOUS BOT is Active ✅ (Connected via MongoDB Cloud)' }).catch(() => {})
         return
       }
 
@@ -330,7 +421,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
     } catch (err) {
-      console.error('Error in message event:', err)
+      console.error('Error in message handler:', err)
     }
   })
 
@@ -350,25 +441,14 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 }
 
 // Global Process Crash Guards
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err)
-})
+process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err))
+process.on('unhandledRejection', (reason) => console.error('Unhandled Rejection:', reason))
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason)
-})
-
-// REST API endpoint
 app.post('/api/deploy', (req, res) => {
   const { phoneNumber } = req.body
   if (!phoneNumber) return res.status(400).json({ error: 'Phone number is required' })
 
-  const sessionsDir = path.join(__dirname, 'sessions')
-  if (!fs.existsSync(sessionsDir)) {
-    fs.mkdirSync(sessionsDir, { recursive: true })
-  }
-
-  const sessionId = 'user_' + Date.now()
+  const sessionId = 'primary_user'
   startUserBot(sessionId, phoneNumber, io)
 
   return res.json({ success: true, sessionId })
