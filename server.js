@@ -867,6 +867,17 @@ app.post('/api/deploy', (req, res) => {
   if (!phoneNumber) return res.status(400).json({ error: 'Phone number is required' })
 
   const sessionId = 'primary_user'
+
+  // Safely cleanup existing active session before requesting a new pairing code
+  if (activeSessions.has(sessionId)) {
+    try {
+      const existingSock = activeSessions.get(sessionId)
+      existingSock.ev.removeAllListeners()
+      existingSock.end(new Error('Restarting for new pairing code'))
+      activeSessions.delete(sessionId)
+    } catch (e) {}
+  }
+
   startUserBot(sessionId, phoneNumber, io)
 
   return res.json({ success: true, sessionId })
