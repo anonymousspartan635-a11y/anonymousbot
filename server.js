@@ -420,14 +420,21 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         }
 
         const isGroup = jid.endsWith('@g.us')
-        const quotedSender = contextInfo?.participant || jid
-        const isMyOwnMessage = quotedSender.split('@')[0] === sock.user.id.split(':')[0]
+        const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net'
+        
+        let quotedSender
+        if (isGroup) {
+          quotedSender = contextInfo?.participant
+        } else {
+          quotedSender = contextInfo?.participant || (msg.key.fromMe ? myJid : jid)
+        }
 
-        // Check Group Admin permissions if deleting someone else's message in a group
+        const isMyOwnMessage = quotedSender ? (quotedSender.split('@')[0] === sock.user.id.split(':')[0]) : false
+
         if (isGroup && !isMyOwnMessage) {
           try {
             const meta = await sock.groupMetadata(jid)
-            const botAdmin = meta.participants.find(p => p.id === sock.user.id.split(':')[0] + '@s.whatsapp.net')?.admin
+            const botAdmin = meta.participants.find(p => p.id === myJid)?.admin
             if (!botAdmin) {
               await sock.sendMessage(jid, { text: '❌ I need to be a **Group Admin** to delete messages sent by other members.' }).catch(() => {})
               return
@@ -438,7 +445,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
           return
         }
 
-        // Construct exact deletion key
         const deleteKey = {
           remoteJid: jid,
           fromMe: isMyOwnMessage,
@@ -447,9 +453,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         }
 
         try {
-          // Delete the original quoted message
           await sock.sendMessage(jid, { delete: deleteKey })
-          // Delete the .del command message itself to keep chat clean
           await sock.sendMessage(jid, { delete: msg.key }).catch(() => {})
         } catch (e) {
           console.error('Delete error:', e)
@@ -467,11 +471,15 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
           return
         }
 
+        // Clean phone number and ensure full @s.whatsapp.net JID format
+        const cleanJid = target.split('@')[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net'
+
         try {
-          await sock.sendMessage(jid, { text: `🚫 Blocking @${target.split('@')[0]}...`, mentions: [target] })
-          await sock.updateBlockStatus(target, 'block')
+          await sock.sendMessage(jid, { text: `🚫 Blocking @${cleanJid.split('@')[0]}...`, mentions: [cleanJid] })
+          await sock.updateBlockStatus(cleanJid, 'block')
         } catch (e) {
-          await sock.sendMessage(jid, { text: '❌ Failed to block user: ' + e.message }).catch(() => {})
+          console.error('Block error:', e)
+          await sock.sendMessage(jid, { text: '❌ Failed to block user: ' + (e.message || e) }).catch(() => {})
         }
         return
       }
