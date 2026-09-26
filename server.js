@@ -12,6 +12,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys'
 import P from 'pino'
 import axios from 'axios'
+import yts from 'yt-search'
 import { MongoClient } from 'mongodb'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -50,7 +51,7 @@ global.readCommands = true
 global.autoTyping = false
 global.autoRecording = false
 
-// Dynamic Custom Auto-Reply Message (Default fallback value)
+// Dynamic Custom Auto-Reply Message
 global.customAwayMsg = "ANONYMOUS SPARTAN 😈😎 is away, please just leave a message he will be back in a blink of an eye 👁"
 
 const msgStore = {}
@@ -248,23 +249,64 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     await sock.sendMessage(jid, { text: textMenu }).catch(() => {})
   }
 
-  // Song Fetcher with Format Selection
+  // Bulletproof YouTube Downloader Handler
   async function fetchSongDetails(songQuery, jid) {
-    const searchMsg = await sock.sendMessage(jid, { text: `🔎 Searching for: *${songQuery}*...` }).catch(() => {})
+    await sock.sendMessage(jid, { text: `🔎 Searching YouTube for: *${songQuery}*...` }).catch(() => {})
 
+    let targetUrl = ''
+    let title = songQuery
+
+    // Step 1: Query YouTube via yt-search
+    try {
+      const searchResult = await yts(songQuery)
+      const video = searchResult?.videos?.[0]
+      if (video) {
+        targetUrl = video.url
+        title = video.title
+      }
+    } catch (err) {
+      console.error('yt-search failed:', err.message)
+    }
+
+    if (!targetUrl) {
+      targetUrl = songQuery
+    }
+
+    // Step 2: Query audio endpoints using direct video URL
     const apis = [
-      `https://api.vreden.my.id/api/ytplay?query=${encodeURIComponent(songQuery)}`,
-      `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(songQuery)}`,
-      `https://widipe.com/download/ytmp3?url=${encodeURIComponent(songQuery)}`
+      {
+        url: `https://api.vreden.my.id/api/ytmp3?url=${encodeURIComponent(targetUrl)}`,
+        extract: (d) => d?.result?.download?.url || d?.result?.url
+      },
+      {
+        url: `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(targetUrl)}`,
+        extract: (d) => d?.result?.downloadUrl || d?.result?.url || d?.url
+      },
+      {
+        url: `https://widipe.com/download/ytmp3?url=${encodeURIComponent(targetUrl)}`,
+        extract: (d) => d?.result?.dl_url || d?.result?.mp3 || d?.dl_url
+      },
+      {
+        url: `https://api.cobalt.tools/api/json`,
+        method: 'POST',
+        data: { url: targetUrl, audioFormat: 'mp3', isAudioOnly: true },
+        extract: (d) => d?.url
+      }
     ]
 
-    for (const apiUrl of apis) {
+    for (const api of apis) {
       try {
-        const res = await axios.get(apiUrl, { timeout: 12000 })
-        const result = res.data?.result || res.data
-        
-        let audioUrl = result?.download?.url || result?.url || result?.dl_url || result?.mp3 || result?.downloadUrl
-        let title = result?.title || songQuery
+        let res
+        if (api.method === 'POST') {
+          res = await axios.post(api.url, api.data, {
+            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+            timeout: 15000
+          })
+        } else {
+          res = await axios.get(api.url, { timeout: 15000 })
+        }
+
+        const audioUrl = api.extract(res.data)
 
         if (audioUrl) {
           const menuText = `🎶 *${title}*\n\nSelect delivery format by replying with the number:\n\n1️⃣ Audio File (.mp3)\n2️⃣ Document File (.doc/.mp3)\n3️⃣ Voice Message (PTT)`
@@ -280,11 +322,11 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
           return
         }
       } catch (e) {
-        console.error(`API failed: ${apiUrl}`, e.message)
+        console.error(`Download API failed: ${api.url}`, e.message)
       }
     }
 
-    await sock.sendMessage(jid, { text: `❌ Could not find or download track. Please try again.` }).catch(() => {})
+    await sock.sendMessage(jid, { text: `❌ All audio download servers are currently offline or busy. Please try again shortly.` }).catch(() => {})
   }
 
   // Helper to extract user target from mentions or replies
@@ -403,7 +445,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Silent Anti-ViewOnce (Sends intercepted media directly to your own chat)
+      // Silent Anti-ViewOnce
       if (global.antiViewOnce) {
         const viewOnce = msg.message?.viewOnceMessageV2?.message || msg.message?.viewOnceMessage?.message
         if (viewOnce) {
@@ -451,7 +493,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       const cmd = text.toLowerCase().trim()
 
-      // Command: .setreply (Set custom greeting text interactively)
+      // Command: .setreply
       if (cmd === '.setreply' || cmd.startsWith('.setreply ')) {
         const inlineText = text.substring(9).trim()
         if (inlineText) {
@@ -474,7 +516,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         }
       }
 
-      // Command: .del / .delete (Delete replied message)
+      // Command: .del / .delete
       if (cmd === '.del' || cmd === '.delete') {
         const quotedKey = contextInfo?.stanzaId
 
@@ -526,7 +568,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Command: .block (Block user)
+      // Command: .block
       if (cmd.startsWith('.block')) {
         let target = getTargetJid(msg) || jid
 
@@ -547,7 +589,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Command: .unlink (Drop Session from MongoDB Atlas)
+      // Command: .unlink
       if (cmd === '.unlink') {
         await sock.sendMessage(jid, { text: '🗑️ *Unlinking Session...*\nDeleting MongoDB Atlas credentials and logging out.' }).catch(() => {})
         
@@ -802,7 +844,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     }
   })
 
-  // Anti-Delete Handler (Triggers ONLY when the other person deletes a message)
+  // Anti-Delete Handler
   sock.ev.on('messages.update', async updates => {
     if (!global.antiDelete) return
     for (let up of updates) {
