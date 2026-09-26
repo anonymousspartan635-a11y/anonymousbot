@@ -13,6 +13,7 @@ import makeWASocket, {
 import P from 'pino'
 import axios from 'axios'
 import yts from 'yt-search'
+import ytdl from '@distube/ytdl-core'
 import { MongoClient } from 'mongodb'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -249,14 +250,13 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     await sock.sendMessage(jid, { text: textMenu }).catch(() => {})
   }
 
-  // Bulletproof YouTube Downloader Handler
+  // Song Fetcher with Direct ytdl Extraction & Fallbacks
   async function fetchSongDetails(songQuery, jid) {
     await sock.sendMessage(jid, { text: `🔎 Searching YouTube for: *${songQuery}*...` }).catch(() => {})
 
     let targetUrl = ''
     let title = songQuery
 
-    // Step 1: Query YouTube via yt-search
     try {
       const searchResult = await yts(songQuery)
       const video = searchResult?.videos?.[0]
@@ -272,61 +272,57 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       targetUrl = songQuery
     }
 
-    // Step 2: Query audio endpoints using direct video URL
-    const apis = [
-      {
-        url: `https://api.vreden.my.id/api/ytmp3?url=${encodeURIComponent(targetUrl)}`,
-        extract: (d) => d?.result?.download?.url || d?.result?.url
-      },
-      {
-        url: `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(targetUrl)}`,
-        extract: (d) => d?.result?.downloadUrl || d?.result?.url || d?.url
-      },
-      {
-        url: `https://widipe.com/download/ytmp3?url=${encodeURIComponent(targetUrl)}`,
-        extract: (d) => d?.result?.dl_url || d?.result?.mp3 || d?.dl_url
-      },
-      {
-        url: `https://api.cobalt.tools/api/json`,
-        method: 'POST',
-        data: { url: targetUrl, audioFormat: 'mp3', isAudioOnly: true },
-        extract: (d) => d?.url
+    let audioUrl = null
+
+    // Direct Extraction via @distube/ytdl-core
+    try {
+      const info = await ytdl.getInfo(targetUrl)
+      const format = ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' })
+      if (format && format.url) {
+        audioUrl = format.url
       }
-    ]
+    } catch (e) {
+      console.error('ytdl-core extraction failed:', e.message)
+    }
 
-    for (const api of apis) {
-      try {
-        let res
-        if (api.method === 'POST') {
-          res = await axios.post(api.url, api.data, {
-            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-            timeout: 15000
+    // Fallback External APIs
+    if (!audioUrl) {
+      const fallbackApis = [
+        `https://api.vreden.my.id/api/ytmp3?url=${encodeURIComponent(targetUrl)}`,
+        `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(targetUrl)}`,
+        `https://widipe.com/download/ytmp3?url=${encodeURIComponent(targetUrl)}`
+      ]
+
+      for (const apiUrl of fallbackApis) {
+        try {
+          const res = await axios.get(apiUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+            timeout: 10000
           })
-        } else {
-          res = await axios.get(api.url, { timeout: 15000 })
+          const result = res.data?.result || res.data
+          audioUrl = result?.download?.url || result?.downloadUrl || result?.dl_url || result?.url
+          if (audioUrl) break
+        } catch (e) {
+          console.error(`Fallback API failed: ${apiUrl}`, e.message)
         }
-
-        const audioUrl = api.extract(res.data)
-
-        if (audioUrl) {
-          const menuText = `🎶 *${title}*\n\nSelect delivery format by replying with the number:\n\n1️⃣ Audio File (.mp3)\n2️⃣ Document File (.doc/.mp3)\n3️⃣ Voice Message (PTT)`
-          
-          const promptMsg = await sock.sendMessage(jid, { text: menuText }).catch(() => {})
-
-          if (promptMsg?.key?.id) {
-            awaitingSongFormatSelection.set(promptMsg.key.id, {
-              audioUrl,
-              title
-            })
-          }
-          return
-        }
-      } catch (e) {
-        console.error(`Download API failed: ${api.url}`, e.message)
       }
     }
 
-    await sock.sendMessage(jid, { text: `❌ All audio download servers are currently offline or busy. Please try again shortly.` }).catch(() => {})
+    if (audioUrl) {
+      const menuText = `🎶 *${title}*\n\nSelect delivery format by replying with the number:\n\n1️⃣ Audio File (.mp3)\n2️⃣ Document File (.doc/.mp3)\n3️⃣ Voice Message (PTT)`
+      
+      const promptMsg = await sock.sendMessage(jid, { text: menuText }).catch(() => {})
+
+      if (promptMsg?.key?.id) {
+        awaitingSongFormatSelection.set(promptMsg.key.id, {
+          audioUrl,
+          title
+        })
+      }
+      return
+    }
+
+    await sock.sendMessage(jid, { text: `❌ Could not extract audio stream. Please try again shortly.` }).catch(() => {})
   }
 
   // Helper to extract user target from mentions or replies
@@ -409,21 +405,18 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
           try {
             if (choice === '1') {
-              // Standard Audio File
               await sock.sendMessage(jid, {
                 audio: { url: songData.audioUrl },
                 mimetype: 'audio/mpeg',
                 fileName: `${songData.title}.mp3`
               })
             } else if (choice === '2') {
-              // Document File
               await sock.sendMessage(jid, {
                 document: { url: songData.audioUrl },
                 mimetype: 'audio/mpeg',
                 fileName: `${songData.title}.mp3`
               })
             } else if (choice === '3') {
-              // Voice Message (PTT)
               await sock.sendMessage(jid, {
                 audio: { url: songData.audioUrl },
                 mimetype: 'audio/mp4',
@@ -437,7 +430,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         }
       }
 
-      // Check if user is replying with custom message text for .setreply
+      // Custom message text input for .setreply
       if (awaitingCustomReplyInput.has(jid) && msg.key.fromMe) {
         global.customAwayMsg = text
         awaitingCustomReplyInput.delete(jid)
