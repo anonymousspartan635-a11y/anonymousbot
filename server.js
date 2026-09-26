@@ -37,8 +37,9 @@ const statusEmojis = [
   '😍', '🤩', '😎', '🥹', '😂', '🤣', '🤤', '🫠', '🙃', '🙈'
 ]
 
-// Global Settings
+// Global Settings (Separated Status View & Status React)
 global.autoStatus = true
+global.autoReactStatus = false
 global.msgType = 'text'
 global.antiViewOnce = true
 global.autoSticker = false
@@ -223,7 +224,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     sock.ev.on('connection.update', async (u) => {
       if ((u.connection === 'connecting' || u.qr) && !pairingRequested) {
         pairingRequested = true
-        // Allow TCP handshake 6 seconds to register on WhatsApp servers
         setTimeout(async () => {
           try {
             console.log(`📱 Requesting pairing code for ${cleanNumber}...`)
@@ -249,21 +249,22 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     awaitingSettingsReply.add(jid)
     const textMenu = `╭───「 *ANONYMOUS BOT* 」───
 │ ⚙️ *BOT SETTINGS*
-│ Reply with a dot command (.1 to .13) or text command:
+│ Reply with a dot command (.1 to .14) or text command:
 │
 │ ✯ .1 Auto Status View [${global.autoStatus ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .2 MSG Type [${global.msgType}]
-│ ✯ .3 Anti View Once [${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .4 Auto Sticker [${global.autoSticker ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .5 Auto Reply [${global.autoReply ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .6 Anti Bad Words [${global.antiBadWords ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .7 Anti Link [${global.antiLink ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .8 Anti Call [${global.antiCall ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .9 Anti Delete [${global.antiDelete ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .10 Always Online [${global.alwaysOnline ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .11 Read Commands [${global.readCommands ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .12 Auto Typing [${global.autoTyping ? 'ON ✅' : 'OFF ❌'}]
-│ ✯ .13 Auto Recording [${global.autoRecording ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .2 Auto Status React [${global.autoReactStatus ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .3 MSG Type [${global.msgType}]
+│ ✯ .4 Anti View Once [${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .5 Auto Sticker [${global.autoSticker ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .6 Auto Reply [${global.autoReply ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .7 Anti Bad Words [${global.antiBadWords ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .8 Anti Link [${global.antiLink ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .9 Anti Call [${global.antiCall ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .10 Anti Delete [${global.antiDelete ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .11 Always Online [${global.alwaysOnline ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .12 Read Commands [${global.readCommands ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .13 Auto Typing [${global.autoTyping ? 'ON ✅' : 'OFF ❌'}]
+│ ✯ .14 Auto Recording [${global.autoRecording ? 'ON ✅' : 'OFF ❌'}]
 │
 │ 🛠️ *UTILITY COMMANDS:*
 │ ✯ .setreply - Change greeting response text
@@ -370,15 +371,25 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       const jid = msg.key.remoteJid
       const sender = msg.key.participant || jid
 
+      // --- STATUS BROADCAST HANDLER (SEPARATED VIEW & REACT) ---
       if (jid === 'status@broadcast' || jid.endsWith('@broadcast')) {
+        const participantJid = msg.key.participant || sender
+
+        // 1. AUTO VIEW STATUS ONLY
         if (global.autoStatus) {
-          await sock.readMessages([msg.key]).catch(() => {})
+          try {
+            await sock.sendReceipt(jid, participantJid, [msg.key.id], 'read')
+          } catch (e) {}
+        }
+
+        // 2. AUTO REACT TO STATUS ONLY
+        if (global.autoReactStatus) {
           try {
             const randomEmoji = statusEmojis[Math.floor(Math.random() * statusEmojis.length)]
             await sock.sendMessage(
               'status@broadcast',
               { react: { text: randomEmoji, key: msg.key } },
-              { statusJidList: [msg.key.participant] }
+              { statusJidList: [participantJid] }
             )
           } catch (e) {}
         }
@@ -577,15 +588,21 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      if (cmd.startsWith('.autoreply')) {
-        global.autoReply = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.autoReply
-        await sock.sendMessage(jid, { text: `🤖 Auto Reply is now: *${global.autoReply ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+      if (cmd.startsWith('.autostatus')) {
+        global.autoStatus = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.autoStatus
+        await sock.sendMessage(jid, { text: `👁️ Auto Status View is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
-      if (cmd.startsWith('.autostatus')) {
-        global.autoStatus = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.autoStatus
-        await sock.sendMessage(jid, { text: `👁️ Auto Status View & Reaction is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+      if (cmd.startsWith('.autoreactstatus') || cmd.startsWith('.autostatusreact')) {
+        global.autoReactStatus = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.autoReactStatus
+        await sock.sendMessage(jid, { text: `❤️ Auto Status React is now: *${global.autoReactStatus ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        return
+      }
+
+      if (cmd.startsWith('.autoreply')) {
+        global.autoReply = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.autoReply
+        await sock.sendMessage(jid, { text: `🤖 Auto Reply is now: *${global.autoReply ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
@@ -619,27 +636,28 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      const isDotSwitch = ['.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9', '.10', '.11', '.12', '.13'].includes(cmd)
-      const isNumSwitch = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'].includes(cmd)
+      const isDotSwitch = ['.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9', '.10', '.11', '.12', '.13', '.14'].includes(cmd)
+      const isNumSwitch = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'].includes(cmd)
 
       if (isDotSwitch || (awaitingSettingsReply.has(jid) && isNumSwitch)) {
         let option = cmd.replace('.', '')
         let replyMsg = ''
 
         switch (option) {
-          case '1': global.autoStatus = !global.autoStatus; replyMsg = `👁️ Auto Status View & Reaction is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '2': global.msgType = global.msgType === 'text' ? 'button' : 'text'; replyMsg = `💬 MSG Type set to: *${global.msgType}*`; break;
-          case '3': global.antiViewOnce = !global.antiViewOnce; replyMsg = `👁️ Anti View Once is now: *${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '4': global.autoSticker = !global.autoSticker; replyMsg = `🖼️ Auto Sticker is now: *${global.autoSticker ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '5': global.autoReply = !global.autoReply; replyMsg = `🤖 Auto Reply is now: *${global.autoReply ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '6': global.antiBadWords = !global.antiBadWords; replyMsg = `⚠️ Anti Bad Words is now: *${global.antiBadWords ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '7': global.antiLink = !global.antiLink; replyMsg = `🔗 Anti Link is now: *${global.antiLink ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '8': global.antiCall = !global.antiCall; replyMsg = `📞 Anti Call is now: *${global.antiCall ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '9': global.antiDelete = !global.antiDelete; replyMsg = `🗑️ Anti Delete is now: *${global.antiDelete ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '10': global.alwaysOnline = !global.alwaysOnline; replyMsg = `🟢 Always Online is now: *${global.alwaysOnline ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '11': global.readCommands = !global.readCommands; replyMsg = `✓✓ Read Commands is now: *${global.readCommands ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '12': global.autoTyping = !global.autoTyping; replyMsg = `✍️ Auto Typing is now: *${global.autoTyping ? 'ON ✅' : 'OFF ❌'}*`; break;
-          case '13': global.autoRecording = !global.autoRecording; replyMsg = `🎙️ Auto Recording is now: *${global.autoRecording ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '1': global.autoStatus = !global.autoStatus; replyMsg = `👁️ Auto Status View is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '2': global.autoReactStatus = !global.autoReactStatus; replyMsg = `❤️ Auto Status React is now: *${global.autoReactStatus ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '3': global.msgType = global.msgType === 'text' ? 'button' : 'text'; replyMsg = `💬 MSG Type set to: *${global.msgType}*`; break;
+          case '4': global.antiViewOnce = !global.antiViewOnce; replyMsg = `👁️ Anti View Once is now: *${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '5': global.autoSticker = !global.autoSticker; replyMsg = `🖼️ Auto Sticker is now: *${global.autoSticker ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '6': global.autoReply = !global.autoReply; replyMsg = `🤖 Auto Reply is now: *${global.autoReply ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '7': global.antiBadWords = !global.antiBadWords; replyMsg = `⚠️ Anti Bad Words is now: *${global.antiBadWords ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '8': global.antiLink = !global.antiLink; replyMsg = `🔗 Anti Link is now: *${global.antiLink ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '9': global.antiCall = !global.antiCall; replyMsg = `📞 Anti Call is now: *${global.antiCall ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '10': global.antiDelete = !global.antiDelete; replyMsg = `🗑️ Anti Delete is now: *${global.antiDelete ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '11': global.alwaysOnline = !global.alwaysOnline; replyMsg = `🟢 Always Online is now: *${global.alwaysOnline ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '12': global.readCommands = !global.readCommands; replyMsg = `✓✓ Read Commands is now: *${global.readCommands ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '13': global.autoTyping = !global.autoTyping; replyMsg = `✍️ Auto Typing is now: *${global.autoTyping ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '14': global.autoRecording = !global.autoRecording; replyMsg = `🎙️ Auto Recording is now: *${global.autoRecording ? 'ON ✅' : 'OFF ❌'}*`; break;
         }
 
         awaitingSettingsReply.delete(jid)
