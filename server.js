@@ -46,7 +46,6 @@ const awaitingSettingsReply = new Set()
 async function startUserBot(sessionId, phoneNumber, socketEmitter) {
   const authFolder = path.join(__dirname, 'sessions', sessionId)
   
-  // Ensure sessions folder exists to prevent crashes
   if (!fs.existsSync(authFolder)) {
     fs.mkdirSync(authFolder, { recursive: true })
   }
@@ -114,7 +113,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     awaitingSettingsReply.add(jid)
     const textMenu = `╭───「 *ANONYMOUS BOT* 」───
 │ ⚙️ *BOT SETTINGS*
-│ Reply with a dot command (.1 to .13) to toggle:
+│ Reply with a dot command (.1 to .13) or text command:
 │
 │ ✯ .1 Auto Status View [${global.autoStatus ? 'ON ✅' : 'OFF ❌'}]
 │ ✯ .2 MSG Type [${global.msgType}]
@@ -130,7 +129,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 │ ✯ .12 Auto Typing [${global.autoTyping ? 'ON ✅' : 'OFF ❌'}]
 │ ✯ .13 Auto Recording [${global.autoRecording ? 'ON ✅' : 'OFF ❌'}]
 ╰───────────────────
-💬 *Send .1 through .13 to toggle features*`
+💬 *Send .1 through .13 or use direct commands (e.g. .autoreply off)*`
 
     await sock.sendMessage(jid, { text: textMenu }).catch(() => {})
   }
@@ -220,7 +219,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         } catch (e) {}
       }
 
-      const cmd = text.toLowerCase()
+      const cmd = text.toLowerCase().trim()
 
       // Command: Open Settings
       if (cmd === '.settings' || cmd === '.botsettings' || cmd === '.menu') {
@@ -228,7 +227,64 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Toggle Options (.1 to .13) or raw number replies
+      // Direct Text Commands with Feedback
+      if (cmd.startsWith('.autoreply')) {
+        if (cmd.includes('on')) global.autoReply = true
+        else if (cmd.includes('off')) global.autoReply = false
+        else global.autoReply = !global.autoReply
+        await sock.sendMessage(jid, { text: `🤖 Auto Reply is now: *${global.autoReply ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        return
+      }
+
+      if (cmd.startsWith('.autostatus')) {
+        if (cmd.includes('on')) global.autoStatus = true
+        else if (cmd.includes('off')) global.autoStatus = false
+        else global.autoStatus = !global.autoStatus
+        await sock.sendMessage(jid, { text: `👁️ Auto Status View is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        return
+      }
+
+      if (cmd.startsWith('.antiviewonce')) {
+        if (cmd.includes('on')) global.antiViewOnce = true
+        else if (cmd.includes('off')) global.antiViewOnce = false
+        else global.antiViewOnce = !global.antiViewOnce
+        await sock.sendMessage(jid, { text: `👁️ Anti View Once is now: *${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        return
+      }
+
+      if (cmd.startsWith('.anticall')) {
+        if (cmd.includes('on')) global.antiCall = true
+        else if (cmd.includes('off')) global.antiCall = false
+        else global.antiCall = !global.antiCall
+        await sock.sendMessage(jid, { text: `📞 Anti Call is now: *${global.antiCall ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        return
+      }
+
+      if (cmd.startsWith('.antilink')) {
+        if (cmd.includes('on')) global.antiLink = true
+        else if (cmd.includes('off')) global.antiLink = false
+        else global.antiLink = !global.antiLink
+        await sock.sendMessage(jid, { text: `🔗 Anti Link is now: *${global.antiLink ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        return
+      }
+
+      if (cmd.startsWith('.antidelete')) {
+        if (cmd.includes('on')) global.antiDelete = true
+        else if (cmd.includes('off')) global.antiDelete = false
+        else global.antiDelete = !global.antiDelete
+        await sock.sendMessage(jid, { text: `🗑️ Anti Delete is now: *${global.antiDelete ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        return
+      }
+
+      if (cmd.startsWith('.alwaysonline')) {
+        if (cmd.includes('on')) global.alwaysOnline = true
+        else if (cmd.includes('off')) global.alwaysOnline = false
+        else global.alwaysOnline = !global.alwaysOnline
+        await sock.sendMessage(jid, { text: `🟢 Always Online is now: *${global.alwaysOnline ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        return
+      }
+
+      // Menu Toggle Options (.1 to .13) or Number Replies
       const isDotSwitch = ['.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9', '.10', '.11', '.12', '.13'].includes(cmd)
       const isNumSwitch = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'].includes(cmd)
 
@@ -237,19 +293,19 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         let replyMsg = ''
 
         switch (option) {
-          case '1': global.autoStatus = !global.autoStatus; replyMsg = `Auto Status View is now: ${global.autoStatus ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '2': global.msgType = global.msgType === 'text' ? 'button' : 'text'; replyMsg = `MSG Type set to: ${global.msgType}`; break;
-          case '3': global.antiViewOnce = !global.antiViewOnce; replyMsg = `Anti View Once is now: ${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '4': global.autoSticker = !global.autoSticker; replyMsg = `Auto Sticker is now: ${global.autoSticker ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '5': global.autoReply = !global.autoReply; replyMsg = `Auto Reply is now: ${global.autoReply ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '6': global.antiBadWords = !global.antiBadWords; replyMsg = `Anti Bad Words is now: ${global.antiBadWords ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '7': global.antiLink = !global.antiLink; replyMsg = `Anti Link is now: ${global.antiLink ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '8': global.antiCall = !global.antiCall; replyMsg = `Anti Call is now: ${global.antiCall ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '9': global.antiDelete = !global.antiDelete; replyMsg = `Anti Delete is now: ${global.antiDelete ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '10': global.alwaysOnline = !global.alwaysOnline; replyMsg = `Always Online is now: ${global.alwaysOnline ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '11': global.readCommands = !global.readCommands; replyMsg = `Read Commands is now: ${global.readCommands ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '12': global.autoTyping = !global.autoTyping; replyMsg = `Auto Typing is now: ${global.autoTyping ? 'ON ✅' : 'OFF ❌'}`; break;
-          case '13': global.autoRecording = !global.autoRecording; replyMsg = `Auto Recording is now: ${global.autoRecording ? 'ON ✅' : 'OFF ❌'}`; break;
+          case '1': global.autoStatus = !global.autoStatus; replyMsg = `👁️ Auto Status View is now: *${global.autoStatus ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '2': global.msgType = global.msgType === 'text' ? 'button' : 'text'; replyMsg = `💬 MSG Type set to: *${global.msgType}*`; break;
+          case '3': global.antiViewOnce = !global.antiViewOnce; replyMsg = `👁️ Anti View Once is now: *${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '4': global.autoSticker = !global.autoSticker; replyMsg = `🖼️ Auto Sticker is now: *${global.autoSticker ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '5': global.autoReply = !global.autoReply; replyMsg = `🤖 Auto Reply is now: *${global.autoReply ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '6': global.antiBadWords = !global.antiBadWords; replyMsg = `⚠️ Anti Bad Words is now: *${global.antiBadWords ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '7': global.antiLink = !global.antiLink; replyMsg = `🔗 Anti Link is now: *${global.antiLink ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '8': global.antiCall = !global.antiCall; replyMsg = `📞 Anti Call is now: *${global.antiCall ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '9': global.antiDelete = !global.antiDelete; replyMsg = `🗑️ Anti Delete is now: *${global.antiDelete ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '10': global.alwaysOnline = !global.alwaysOnline; replyMsg = `🟢 Always Online is now: *${global.alwaysOnline ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '11': global.readCommands = !global.readCommands; replyMsg = `✓✓ Read Commands is now: *${global.readCommands ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '12': global.autoTyping = !global.autoTyping; replyMsg = `✍️ Auto Typing is now: *${global.autoTyping ? 'ON ✅' : 'OFF ❌'}*`; break;
+          case '13': global.autoRecording = !global.autoRecording; replyMsg = `🎙️ Auto Recording is now: *${global.autoRecording ? 'ON ✅' : 'OFF ❌'}*`; break;
         }
 
         awaitingSettingsReply.delete(jid)
