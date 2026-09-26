@@ -415,21 +415,45 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         const quotedKey = contextInfo?.stanzaId
 
         if (!quotedKey) {
-          await sock.sendMessage(jid, { text: '⚠️ Please reply to the message you want to delete using `.del`' }).catch(() => {})
+          await sock.sendMessage(jid, { text: '⚠️ Please reply directly to the message you want to delete using `.del`' }).catch(() => {})
           return
         }
 
+        const isGroup = jid.endsWith('@g.us')
+        const quotedSender = contextInfo?.participant || jid
+        const isMyOwnMessage = quotedSender.split('@')[0] === sock.user.id.split(':')[0]
+
+        // Check Group Admin permissions if deleting someone else's message in a group
+        if (isGroup && !isMyOwnMessage) {
+          try {
+            const meta = await sock.groupMetadata(jid)
+            const botAdmin = meta.participants.find(p => p.id === sock.user.id.split(':')[0] + '@s.whatsapp.net')?.admin
+            if (!botAdmin) {
+              await sock.sendMessage(jid, { text: '❌ I need to be a **Group Admin** to delete messages sent by other members.' }).catch(() => {})
+              return
+            }
+          } catch (e) {}
+        } else if (!isGroup && !isMyOwnMessage) {
+          await sock.sendMessage(jid, { text: '❌ WhatsApp rules do not allow deleting someone else\'s message in direct messages (DMs).' }).catch(() => {})
+          return
+        }
+
+        // Construct exact deletion key
         const deleteKey = {
           remoteJid: jid,
-          fromMe: contextInfo.participant ? contextInfo.participant === sock.user.id.split(':')[0] + '@s.whatsapp.net' : true,
+          fromMe: isMyOwnMessage,
           id: quotedKey,
-          participant: contextInfo.participant
+          participant: isGroup ? quotedSender : undefined
         }
 
         try {
+          // Delete the original quoted message
           await sock.sendMessage(jid, { delete: deleteKey })
+          // Delete the .del command message itself to keep chat clean
+          await sock.sendMessage(jid, { delete: msg.key }).catch(() => {})
         } catch (e) {
-          await sock.sendMessage(jid, { text: '❌ Failed to delete message. Make sure I am group admin or deleting my own message.' }).catch(() => {})
+          console.error('Delete error:', e)
+          await sock.sendMessage(jid, { text: '❌ Failed to delete message.' }).catch(() => {})
         }
         return
       }
@@ -716,7 +740,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       if (up.update.message === null) {
         let stored = msgStore[up.key.remoteJid]?.[up.key.id]
 
-        // Check if message exists and was NOT sent by you
         if (stored && !stored.key.fromMe) {
           let sender = stored.key.participant || stored.key.remoteJid
           let content = stored.message?.conversation || stored.message?.extendedTextMessage?.text || '[Media/Other Message Deleted]'
