@@ -27,7 +27,7 @@ app.use(express.static(path.join(__dirname, 'public')))
 const activeSessions = new Map()
 const badWordsList = ['fuck', 'bitch', 'asshole', 'bastard', 'shit', 'cunt', 'dick']
 
-// Expanded Array of Reaction Emojis
+// Reaction Emojis
 const statusEmojis = [
   '❤️', '💖', '💘', '💝', '💗', '💓', '❣️', '💕', '💙', '💚', '💛', '💜', '🖤', '🤍', '🤎',
   '🔥', '⚡', '💯', '✨', '🌟', '💥', '🚀', '💣', '👑', '🏆',
@@ -50,8 +50,12 @@ global.readCommands = true
 global.autoTyping = false
 global.autoRecording = false
 
+// Dynamic Custom Auto-Reply Message (Default fallback value)
+global.customAwayMsg = "ANONYMOUS SPARTAN 😈😎 is away, please just leave a message he will be back in a blink of an eye 👁"
+
 const msgStore = {}
 const awaitingSettingsReply = new Set()
+const awaitingCustomReplyInput = new Set()
 
 // MongoDB Setup
 const MONGO_URI = process.env.MONGO_URI
@@ -68,7 +72,7 @@ async function initMongo() {
   return db
 }
 
-// Custom MongoDB Authentication Handler with Clear Session feature
+// Custom MongoDB Authentication Handler
 async function useMongoAuthState(sessionId) {
   const database = await initMongo()
   if (!database) throw new Error("MONGO_URI not configured")
@@ -227,6 +231,9 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 │ ✯ .13 Auto Recording [${global.autoRecording ? 'ON ✅' : 'OFF ❌'}]
 │
 │ 🛠️ *UTILITY COMMANDS:*
+│ ✯ .setreply - Change greeting response text
+│ ✯ .del - Delete replied message
+│ ✯ .block - Block user
 │ ✯ .getdp - Save profile photo
 │ ✯ .save - Save replied media/viewOnce
 │ ✯ .getstat - Save replied status
@@ -323,6 +330,14 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         else if (global.autoRecording) await sock.sendPresenceUpdate('recording', jid).catch(() => {})
       }
 
+      // Check if user is replying with custom message text for .setreply
+      if (awaitingCustomReplyInput.has(jid) && msg.key.fromMe) {
+        global.customAwayMsg = text
+        awaitingCustomReplyInput.delete(jid)
+        await sock.sendMessage(jid, { text: `✅ Custom greeting auto-reply set to:\n\n"${global.customAwayMsg}"` }).catch(() => {})
+        return
+      }
+
       if (global.antiViewOnce) {
         const viewOnce = msg.message.viewOnceMessageV2?.message || msg.message.viewOnceMessage?.message
         if (viewOnce) {
@@ -358,6 +373,72 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       }
 
       const cmd = text.toLowerCase().trim()
+
+      // Command: .setreply (Set custom greeting text interactively)
+      if (cmd === '.setreply' || cmd.startsWith('.setreply ')) {
+        const inlineText = text.substring(9).trim()
+        if (inlineText) {
+          global.customAwayMsg = inlineText
+          await sock.sendMessage(jid, { text: `✅ Custom auto-reply message set to:\n\n"${global.customAwayMsg}"` }).catch(() => {})
+        } else {
+          awaitingCustomReplyInput.add(jid)
+          await sock.sendMessage(jid, { text: `💬 *What do you want me to say when you are texted hello, hi, wassup, etc.?*\n\nPlease reply with your custom message now:` }).catch(() => {})
+        }
+        return
+      }
+
+      // --- CUSTOM AUTO REPLY TO GREETINGS ---
+      if (global.autoReply && !msg.key.fromMe) {
+        const greetingTriggers = ['hi', 'hello', 'yo', 'wassup', 'sup', 'bro', 'boi', 'hey']
+        
+        if (greetingTriggers.includes(cmd)) {
+          await sock.sendMessage(jid, { text: global.customAwayMsg }).catch(() => {})
+          return
+        }
+      }
+
+      // Command: .del / .delete (Delete replied message)
+      if (cmd === '.del' || cmd === '.delete') {
+        const contextInfo = msg.message?.extendedTextMessage?.contextInfo
+        const quotedKey = contextInfo?.stanzaId
+
+        if (!quotedKey) {
+          await sock.sendMessage(jid, { text: '⚠️ Please reply to the message you want to delete using `.del`' }).catch(() => {})
+          return
+        }
+
+        const deleteKey = {
+          remoteJid: jid,
+          fromMe: contextInfo.participant ? contextInfo.participant === sock.user.id.split(':')[0] + '@s.whatsapp.net' : true,
+          id: quotedKey,
+          participant: contextInfo.participant
+        }
+
+        try {
+          await sock.sendMessage(jid, { delete: deleteKey })
+        } catch (e) {
+          await sock.sendMessage(jid, { text: '❌ Failed to delete message. Make sure I am group admin or deleting my own message.' }).catch(() => {})
+        }
+        return
+      }
+
+      // Command: .block (Block user)
+      if (cmd.startsWith('.block')) {
+        let target = getTargetJid(msg) || jid
+
+        if (target.endsWith('@g.us')) {
+          await sock.sendMessage(jid, { text: '⚠️ In a group chat, please reply to or tag the user you want to block: `.block @user`' }).catch(() => {})
+          return
+        }
+
+        try {
+          await sock.sendMessage(jid, { text: `🚫 Blocking @${target.split('@')[0]}...`, mentions: [target] })
+          await sock.updateBlockStatus(target, 'block')
+        } catch (e) {
+          await sock.sendMessage(jid, { text: '❌ Failed to block user: ' + e.message }).catch(() => {})
+        }
+        return
+      }
 
       // Command: .unlink (Drop Session from MongoDB Atlas)
       if (cmd === '.unlink') {
