@@ -56,6 +56,7 @@ global.customAwayMsg = "ANONYMOUS SPARTAN 😈😎 is away, please just leave a 
 const msgStore = {}
 const awaitingSettingsReply = new Set()
 const awaitingCustomReplyInput = new Set()
+const awaitingSongFormatSelection = new Map()
 
 // MongoDB Setup
 const MONGO_URI = process.env.MONGO_URI
@@ -247,21 +248,43 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     await sock.sendMessage(jid, { text: textMenu }).catch(() => {})
   }
 
-  // Song Downloader Helper
-  async function downloadSongByName(songQuery, jid) {
-    await sock.sendMessage(jid, { text: `🎵 Searching and downloading: *${songQuery}*...` }).catch(() => {})
-    try {
-      let res = await axios.get(`https://api.vreden.my.id/api/ytplay?query=${encodeURIComponent(songQuery)}`)
-      let audioUrl = res.data?.result?.download?.url || res.data?.result?.url || res.data?.result?.dl_url
-      let title = res.data?.result?.title || songQuery
+  // Song Fetcher with Format Selection
+  async function fetchSongDetails(songQuery, jid) {
+    const searchMsg = await sock.sendMessage(jid, { text: `🔎 Searching for: *${songQuery}*...` }).catch(() => {})
 
-      if (audioUrl) {
-        await sock.sendMessage(jid, { audio: { url: audioUrl }, mimetype: 'audio/mpeg', fileName: `${title}.mp3` })
-        return
+    const apis = [
+      `https://api.vreden.my.id/api/ytplay?query=${encodeURIComponent(songQuery)}`,
+      `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(songQuery)}`,
+      `https://widipe.com/download/ytmp3?url=${encodeURIComponent(songQuery)}`
+    ]
+
+    for (const apiUrl of apis) {
+      try {
+        const res = await axios.get(apiUrl, { timeout: 12000 })
+        const result = res.data?.result || res.data
+        
+        let audioUrl = result?.download?.url || result?.url || result?.dl_url || result?.mp3 || result?.downloadUrl
+        let title = result?.title || songQuery
+
+        if (audioUrl) {
+          const menuText = `🎶 *${title}*\n\nSelect delivery format by replying with the number:\n\n1️⃣ Audio File (.mp3)\n2️⃣ Document File (.doc/.mp3)\n3️⃣ Voice Message (PTT)`
+          
+          const promptMsg = await sock.sendMessage(jid, { text: menuText }).catch(() => {})
+
+          if (promptMsg?.key?.id) {
+            awaitingSongFormatSelection.set(promptMsg.key.id, {
+              audioUrl,
+              title
+            })
+          }
+          return
+        }
+      } catch (e) {
+        console.error(`API failed: ${apiUrl}`, e.message)
       }
-    } catch (e) {}
+    }
 
-    await sock.sendMessage(jid, { text: `❌ Could not download song. Please check the song name or try again.` }).catch(() => {})
+    await sock.sendMessage(jid, { text: `❌ Could not find or download track. Please try again.` }).catch(() => {})
   }
 
   // Helper to extract user target from mentions or replies
@@ -328,6 +351,48 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       if (!msg.key.fromMe) {
         if (global.autoTyping) await sock.sendPresenceUpdate('composing', jid).catch(() => {})
         else if (global.autoRecording) await sock.sendPresenceUpdate('recording', jid).catch(() => {})
+      }
+
+      // Check if user is replying to song format selection
+      const contextInfo = msg.message?.extendedTextMessage?.contextInfo
+      const quotedId = contextInfo?.stanzaId
+
+      if (quotedId && awaitingSongFormatSelection.has(quotedId)) {
+        const songData = awaitingSongFormatSelection.get(quotedId)
+        const choice = text.trim()
+
+        if (['1', '2', '3'].includes(choice)) {
+          awaitingSongFormatSelection.delete(quotedId)
+          await sock.sendMessage(jid, { text: `⏳ Sending *${songData.title}*...` }).catch(() => {})
+
+          try {
+            if (choice === '1') {
+              // Standard Audio File
+              await sock.sendMessage(jid, {
+                audio: { url: songData.audioUrl },
+                mimetype: 'audio/mpeg',
+                fileName: `${songData.title}.mp3`
+              })
+            } else if (choice === '2') {
+              // Document File
+              await sock.sendMessage(jid, {
+                document: { url: songData.audioUrl },
+                mimetype: 'audio/mpeg',
+                fileName: `${songData.title}.mp3`
+              })
+            } else if (choice === '3') {
+              // Voice Message (PTT)
+              await sock.sendMessage(jid, {
+                audio: { url: songData.audioUrl },
+                mimetype: 'audio/mp4',
+                ptt: true
+              })
+            }
+          } catch (err) {
+            await sock.sendMessage(jid, { text: '❌ Failed to send audio file.' }).catch(() => {})
+          }
+          return
+        }
       }
 
       // Check if user is replying with custom message text for .setreply
@@ -411,7 +476,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       // Command: .del / .delete (Delete replied message)
       if (cmd === '.del' || cmd === '.delete') {
-        const contextInfo = msg.message?.extendedTextMessage?.contextInfo
         const quotedKey = contextInfo?.stanzaId
 
         if (!quotedKey) {
@@ -471,7 +535,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
           return
         }
 
-        // Clean phone number and ensure full @s.whatsapp.net JID format
         const cleanJid = target.split('@')[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net'
 
         try {
@@ -606,7 +669,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       // Command: .save
       if (cmd === '.save') {
-        const contextInfo = msg.message?.extendedTextMessage?.contextInfo
         const quotedMsg = contextInfo?.quotedMessage
 
         if (!quotedMsg) {
@@ -640,7 +702,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       // Command: .getstat
       if (cmd === '.getstat') {
-        const contextInfo = msg.message?.extendedTextMessage?.contextInfo
         const quotedMsg = contextInfo?.quotedMessage
 
         if (!quotedMsg) {
@@ -733,7 +794,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
           await sock.sendMessage(jid, { text: '⚠️ Please provide a song name.\n*Example:* `.song Drake Hotline Bling`' }).catch(() => {})
           return
         }
-        await downloadSongByName(songName, jid)
+        await fetchSongDetails(songName, jid)
         return
       }
     } catch (err) {
