@@ -321,7 +321,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         ""
       ).trim()
 
-      if (!text) return
+      if (!text && !msg.message.viewOnceMessageV2 && !msg.message.viewOnceMessage) return
 
       if (global.readCommands && !msg.key.fromMe) await sock.readMessages([msg.key]).catch(() => {})
 
@@ -338,16 +338,28 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
+      // Silent Anti-ViewOnce (Sends intercepted media directly to your own chat)
       if (global.antiViewOnce) {
-        const viewOnce = msg.message.viewOnceMessageV2?.message || msg.message.viewOnceMessage?.message
+        const viewOnce = msg.message?.viewOnceMessageV2?.message || msg.message?.viewOnceMessage?.message
         if (viewOnce) {
           try {
             const type = Object.keys(viewOnce)[0]
             const buffer = await downloadMediaMessage({ message: viewOnce }, 'buffer', {}, { logger: P({ level: 'silent' }) })
-            let cap = `*👁️ Anti-ViewOnce Triggered* from @${sender.split('@')[0]}`
-            if (type === 'imageMessage') await sock.sendMessage(jid, { image: buffer, caption: cap, mentions: [sender] })
-            if (type === 'videoMessage') await sock.sendMessage(jid, { video: buffer, caption: cap, mentions: [sender] })
-          } catch (e) {}
+            
+            const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net'
+            const senderName = `@${sender.split('@')[0]}`
+            const chatLocation = jid.endsWith('@g.us') ? 'a group chat' : 'direct messages'
+            
+            let cap = `👁️ *Anti-ViewOnce Saved*\n\n*From:* ${senderName}\n*Location:* Sent in ${chatLocation}`
+            
+            if (type === 'imageMessage') {
+              await sock.sendMessage(myJid, { image: buffer, caption: cap, mentions: [sender] })
+            } else if (type === 'videoMessage') {
+              await sock.sendMessage(myJid, { video: buffer, caption: cap, mentions: [sender] })
+            }
+          } catch (e) {
+            console.error('Error handling ViewOnce media:', e)
+          }
         }
       }
 
@@ -387,7 +399,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // --- CUSTOM AUTO REPLY TO GREETINGS ---
+      // Custom Auto-Reply to Greetings
       if (global.autoReply && !msg.key.fromMe) {
         const greetingTriggers = ['hi', 'hello', 'yo', 'wassup', 'sup', 'bro', 'boi', 'hey']
         
@@ -697,15 +709,22 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     }
   })
 
-  // Anti-Delete Handler
+  // Anti-Delete Handler (Triggers ONLY when the other person deletes a message)
   sock.ev.on('messages.update', async updates => {
     if (!global.antiDelete) return
     for (let up of updates) {
       if (up.update.message === null) {
         let stored = msgStore[up.key.remoteJid]?.[up.key.id]
-        if (stored) {
-          let content = stored.message?.conversation || stored.message?.extendedTextMessage?.text || '[Media Deleted]'
-          await sock.sendMessage(up.key.remoteJid, { text: `🚫 *Anti-Delete Triggered*\nMessage content: ${content}` }).catch(() => {})
+
+        // Check if message exists and was NOT sent by you
+        if (stored && !stored.key.fromMe) {
+          let sender = stored.key.participant || stored.key.remoteJid
+          let content = stored.message?.conversation || stored.message?.extendedTextMessage?.text || '[Media/Other Message Deleted]'
+
+          await sock.sendMessage(up.key.remoteJid, { 
+            text: `🚫 *Anti-Delete Triggered*\n\n@${sender.split('@')[0]} deleted:\n"${content}"`,
+            mentions: [sender]
+          }).catch(() => {})
         }
       }
     }
