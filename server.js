@@ -29,13 +29,9 @@ const badWordsList = ['fuck', 'bitch', 'asshole', 'bastard', 'shit', 'cunt', 'di
 
 // Expanded Array of Reaction Emojis
 const statusEmojis = [
-  // Love & Hearts
   '❤️', '💖', '💘', '💝', '💗', '💓', '❣️', '💕', '💙', '💚', '💛', '💜', '🖤', '🤍', '🤎',
-  // Hype & Energy
   '🔥', '⚡', '💯', '✨', '🌟', '💥', '🚀', '💣', '👑', '🏆',
-  // Praise & Support
   '👍', '👏', '🙌', '🫡', '🤝', '💪', '🥳', '🎉', '🎊',
-  // Reaction Expressions
   '😍', '🤩', '😎', '🥹', '😂', '🤣', '🤤', '🫠', '🙃', '🙈'
 ]
 
@@ -72,7 +68,7 @@ async function initMongo() {
   return db
 }
 
-// Custom MongoDB Authentication Handler
+// Custom MongoDB Authentication Handler with Clear Session feature
 async function useMongoAuthState(sessionId) {
   const database = await initMongo()
   if (!database) throw new Error("MONGO_URI not configured")
@@ -107,6 +103,15 @@ async function useMongoAuthState(sessionId) {
     } catch (e) {}
   }
 
+  const clearSession = async () => {
+    try {
+      await collection.drop()
+      console.log(`🗑️ Successfully dropped session collection: session_${sessionId}`)
+    } catch (e) {
+      console.error('Error dropping session collection:', e)
+    }
+  }
+
   const creds = (await readData('creds')) || initAuthCreds()
 
   return {
@@ -139,17 +144,19 @@ async function useMongoAuthState(sessionId) {
         }
       }
     },
-    saveCreds: () => writeData(creds, 'creds')
+    saveCreds: () => writeData(creds, 'creds'),
+    clearSession
   }
 }
 
 async function startUserBot(sessionId, phoneNumber, socketEmitter) {
-  let state, saveCreds
+  let state, saveCreds, clearSession
 
   try {
     const mongoAuth = await useMongoAuthState(sessionId)
     state = mongoAuth.state
     saveCreds = mongoAuth.saveCreds
+    clearSession = mongoAuth.clearSession
   } catch (err) {
     console.error('Failed to load MongoDB Session, check MONGO_URI variable.', err)
     return
@@ -224,6 +231,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 │ ✯ .save - Save replied media/viewOnce
 │ ✯ .getstat - Save replied status
 │ ✯ .song <name> - Download songs
+│ ✯ .unlink - Clear session & reset
 │
 │ 👥 *GROUP COMMANDS:*
 │ ✯ .kick | .promote | .demote | .tagall
@@ -249,7 +257,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     await sock.sendMessage(jid, { text: `❌ Could not download song. Please check the song name or try again.` }).catch(() => {})
   }
 
-  // Helper function to extract user target from mentions or replies
+  // Helper to extract user target from mentions or replies
   function getTargetJid(msg) {
     const contextInfo = msg.message?.extendedTextMessage?.contextInfo
     if (contextInfo?.mentionedJid?.length > 0) return contextInfo.mentionedJid[0]
@@ -279,7 +287,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       const jid = msg.key.remoteJid
       const sender = msg.key.participant || jid
 
-      // Status View & Auto Reaction with Expanded Emojis
+      // Status View & Auto Reaction
       if (jid === 'status@broadcast' || jid.endsWith('@broadcast')) {
         if (global.autoStatus) {
           await sock.readMessages([msg.key]).catch(() => {})
@@ -351,6 +359,22 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       const cmd = text.toLowerCase().trim()
 
+      // Command: .unlink (Drop Session from MongoDB Atlas)
+      if (cmd === '.unlink') {
+        await sock.sendMessage(jid, { text: '🗑️ *Unlinking Session...*\nDeleting MongoDB Atlas credentials and logging out.' }).catch(() => {})
+        
+        try {
+          await clearSession()
+          activeSessions.delete(sessionId)
+          await sock.logout().catch(() => {})
+          sock.end(new Error('Session unlinked by user'))
+          console.log(`✅ Session ${sessionId} cleared and socket disconnected.`)
+        } catch (e) {
+          console.error('Error during .unlink command execution:', e)
+        }
+        return
+      }
+
       // Command: Open Settings
       if (cmd === '.settings' || cmd === '.botsettings' || cmd === '.menu') {
         await sendSettingsMenu(jid)
@@ -414,7 +438,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Menu Toggle Options (.1 to .13) or Number Replies
+      // Menu Toggle Options (.1 to .13)
       const isDotSwitch = ['.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9', '.10', '.11', '.12', '.13'].includes(cmd)
       const isNumSwitch = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'].includes(cmd)
 
@@ -443,21 +467,19 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // --- NEW UTILITY COMMANDS ---
-
-      // Command: .getdp (Get Profile Picture)
+      // Command: .getdp
       if (cmd.startsWith('.getdp')) {
         let target = getTargetJid(msg) || sender
         try {
           let dpUrl = await sock.profilePictureUrl(target, 'image')
           await sock.sendMessage(jid, { image: { url: dpUrl }, caption: `🖼️ Profile picture of @${target.split('@')[0]}`, mentions: [target] })
         } catch (e) {
-          await sock.sendMessage(jid, { text: '❌ Could not retrieve profile picture (User may have hidden it or has no profile picture).' }).catch(() => {})
+          await sock.sendMessage(jid, { text: '❌ Could not retrieve profile picture.' }).catch(() => {})
         }
         return
       }
 
-      // Command: .save (Save Replied Media / ViewOnce)
+      // Command: .save
       if (cmd === '.save') {
         const contextInfo = msg.message?.extendedTextMessage?.contextInfo
         const quotedMsg = contextInfo?.quotedMessage
@@ -491,7 +513,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // Command: .getstat (Save Replied Status)
+      // Command: .getstat
       if (cmd === '.getstat') {
         const contextInfo = msg.message?.extendedTextMessage?.contextInfo
         const quotedMsg = contextInfo?.quotedMessage
@@ -518,15 +540,12 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         return
       }
 
-      // --- GROUP ADMINISTRATION COMMANDS ---
-
+      // Group Administration Commands
       if (jid.endsWith('@g.us')) {
-        // Helper to check group permissions
         const meta = await sock.groupMetadata(jid).catch(() => null)
         const isBotAdmin = meta?.participants.find(p => p.id === sock.user.id.split(':')[0] + '@s.whatsapp.net')?.admin
         const isSenderAdmin = meta?.participants.find(p => p.id === sender)?.admin
 
-        // Command: .kick
         if (cmd.startsWith('.kick') || cmd.startsWith('.remove')) {
           if (!isSenderAdmin) return sock.sendMessage(jid, { text: '❌ Only group admins can use this command.' })
           if (!isBotAdmin) return sock.sendMessage(jid, { text: '❌ I need to be a Group Admin to kick members.' })
@@ -539,7 +558,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
           return
         }
 
-        // Command: .promote
         if (cmd.startsWith('.promote')) {
           if (!isSenderAdmin) return sock.sendMessage(jid, { text: '❌ Only group admins can promote members.' })
           if (!isBotAdmin) return sock.sendMessage(jid, { text: '❌ I need to be a Group Admin to promote members.' })
@@ -552,7 +570,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
           return
         }
 
-        // Command: .demote
         if (cmd.startsWith('.demote')) {
           if (!isSenderAdmin) return sock.sendMessage(jid, { text: '❌ Only group admins can demote members.' })
           if (!isBotAdmin) return sock.sendMessage(jid, { text: '❌ I need to be a Group Admin to demote members.' })
@@ -565,7 +582,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
           return
         }
 
-        // Command: .tagall
         if (cmd.startsWith('.tagall') || cmd.startsWith('.everyone')) {
           if (!meta) return
           let participants = meta.participants.map(p => p.id)
@@ -579,13 +595,13 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
         }
       }
 
-      // Command: Alive Status
+      // Command: .alive
       if (cmd === '.alive') {
         await sock.sendMessage(jid, { text: 'ANONYMOUS BOT is Active ✅ (Connected via MongoDB Cloud)' }).catch(() => {})
         return
       }
 
-      // Command: Song Downloader
+      // Command: .song
       if (cmd.startsWith('.song') || cmd.startsWith('.play') || cmd.startsWith('.music')) {
         let songName = text.replace(/^\.(song|play|music)/i, '').trim()
         if (!songName) {
