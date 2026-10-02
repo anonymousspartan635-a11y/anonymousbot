@@ -182,7 +182,17 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     printQRInTerminal: false,
     connectTimeoutMs: 60000,
     defaultQueryTimeoutMs: 60000,
-    keepAliveIntervalMs: 10000
+    keepAliveIntervalMs: 10000,
+    // E2EE Fixes for "Waiting for message" issue
+    syncFullHistory: false,
+    markOnlineOnConnect: true,
+    fireInitQueries: true,
+    getMessage: async (key) => {
+      if (msgStore[key.remoteJid] && msgStore[key.remoteJid][key.id]) {
+        return msgStore[key.remoteJid][key.id].message
+      }
+      return proto.Message.fromObject({})
+    }
   })
 
   activeSessions.set(sessionId, sock)
