@@ -15,6 +15,7 @@ import axios from 'axios'
 import yts from 'yt-search'
 import ytdl from '@distube/ytdl-core'
 import { MongoClient } from 'mongodb'
+import NodeCache from 'node-cache'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -29,6 +30,9 @@ app.use(express.static(path.join(__dirname, 'public')))
 const activeSessions = new Map()
 const badWordsList = ['fuck', 'bitch', 'asshole', 'bastard', 'shit', 'cunt', 'dick']
 
+// Cache for message retries to resolve E2EE key sync issues
+const msgRetryCounterCache = new NodeCache()
+
 // Reaction Emojis
 const statusEmojis = [
   '❤️', '💖', '💘', '💝', '💗', '💓', '❣️', '💕', '💙', '💚', '💛', '💜', '🖤', '🤍', '🤎',
@@ -37,7 +41,7 @@ const statusEmojis = [
   '😍', '🤩', '😎', '🥹', '😂', '🤣', '🤤', '🫠', '🙃', '🙈'
 ]
 
-// Global Settings (Separated Status View & Status React)
+// Global Settings
 global.autoStatus = true
 global.autoReactStatus = false
 global.msgType = 'text'
@@ -183,15 +187,18 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     connectTimeoutMs: 60000,
     defaultQueryTimeoutMs: 60000,
     keepAliveIntervalMs: 10000,
-    // E2EE Fixes for "Waiting for message" issue
+    
+    // --- E2EE KEY SYNC & SELF-CHAT FIXES ---
+    msgRetryCounterCache,
     syncFullHistory: false,
     markOnlineOnConnect: true,
     fireInitQueries: true,
+    emitOwnEvents: true, // Enables self-chat event updates
     getMessage: async (key) => {
       if (msgStore[key.remoteJid] && msgStore[key.remoteJid][key.id]) {
         return msgStore[key.remoteJid][key.id].message
       }
-      return proto.Message.fromObject({})
+      return { conversation: 'Bot Response' }
     }
   })
 
@@ -227,7 +234,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     }
   })
 
-  // Event-Driven Pairing Code Generation
+  // Pairing Code Request
   if (!sock.authState.creds.registered && phoneNumber) {
     const cleanNumber = phoneNumber.replace(/[^0-9]/g, '')
 
@@ -381,18 +388,16 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
       const jid = msg.key.remoteJid
       const sender = msg.key.participant || jid
 
-      // --- STATUS BROADCAST HANDLER (SEPARATED VIEW & REACT) ---
+      // Status Handler
       if (jid === 'status@broadcast' || jid.endsWith('@broadcast')) {
         const participantJid = msg.key.participant || sender
 
-        // 1. AUTO VIEW STATUS ONLY
         if (global.autoStatus) {
           try {
             await sock.sendReceipt(jid, participantJid, [msg.key.id], 'read')
           } catch (e) {}
         }
 
-        // 2. AUTO REACT TO STATUS ONLY
         if (global.autoReactStatus) {
           try {
             const randomEmoji = statusEmojis[Math.floor(Math.random() * statusEmojis.length)]
@@ -636,7 +641,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       if (cmd.startsWith('.antidelete')) {
         global.antiDelete = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.antiDelete
-        await sock.sendMessage(jid, { text: `🗑️ Anti Delete is now: *${global.antiDelete ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        await sock.sendMessage(jid, { text: `🗑️️ Anti Delete is now: *${global.antiDelete ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
@@ -834,7 +839,6 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
   })
 }
 
-// Global Process Crash Guards
 process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err))
 process.on('unhandledRejection', (reason) => console.error('Unhandled Rejection:', reason))
 
@@ -853,7 +857,6 @@ app.post('/api/deploy', async (req, res) => {
     } catch (e) {}
   }
 
-  // Force clean slate in MongoDB before generating pairing code
   try {
     const mongoAuth = await useMongoAuthState(sessionId)
     await mongoAuth.clearSession()
