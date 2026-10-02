@@ -188,17 +188,19 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
     defaultQueryTimeoutMs: 60000,
     keepAliveIntervalMs: 10000,
     
-    // --- E2EE KEY SYNC & SELF-CHAT FIXES ---
+    // --- E2EE KEY SYNC & WAITING FOR MESSAGE FIXES ---
     msgRetryCounterCache,
     syncFullHistory: false,
     markOnlineOnConnect: true,
     fireInitQueries: true,
-    emitOwnEvents: true, // Enables self-chat event updates
+    emitOwnEvents: false, // Prevents self-chat session deadlocks
     getMessage: async (key) => {
       if (msgStore[key.remoteJid] && msgStore[key.remoteJid][key.id]) {
         return msgStore[key.remoteJid][key.id].message
       }
-      return { conversation: 'Bot Response' }
+      return proto.Message.fromObject({
+        conversation: "ANONYMOUS BOT"
+      })
     }
   })
 
@@ -623,7 +625,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       if (cmd.startsWith('.antiviewonce')) {
         global.antiViewOnce = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.antiViewOnce
-        await sock.sendMessage(jid, { text: `👁️ Anti View Once is now: *${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        await sock.sendMessage(jid, { text: `👁️️ Anti View Once is now: *${global.antiViewOnce ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
@@ -641,7 +643,7 @@ async function startUserBot(sessionId, phoneNumber, socketEmitter) {
 
       if (cmd.startsWith('.antidelete')) {
         global.antiDelete = cmd.includes('on') ? true : cmd.includes('off') ? false : !global.antiDelete
-        await sock.sendMessage(jid, { text: `🗑️️ Anti Delete is now: *${global.antiDelete ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
+        await sock.sendMessage(jid, { text: `🗑 Anti Delete is now: *${global.antiDelete ? 'ON ✅' : 'OFF ❌'}*` }).catch(() => {})
         return
       }
 
